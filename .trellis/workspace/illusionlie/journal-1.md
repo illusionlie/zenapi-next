@@ -495,3 +495,25 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 新增 Claude Code 客户端伪装预设
+
+**Date**: 2026-09-29
+**Task**: 新增 Claude Code 客户端伪装预设
+**Branch**: `main`
+
+### Summary
+
+在 CLIENT_PRESETS 新增第 8 个预设 claude-code（Claude Code 2.1.226，testing 待实测）：15 个请求头快照（UA/9-flag anthropic-beta/x-stainless-* 全家，x-claude-code-session-id 走 {{uuid}} 每请求解析；省略 authorization/x-api-key/content-type 并记因）+ systemPrompt 注入 billing 行与 Agent SDK 身份行；note 记录证据来源（pi-anaouter-cc @ d46b8f3 抓包校准）、版本锚点与 body 级校验限制（metadata.user_id/context_management/?beta=true 超出体系）。纯前端数据改动，零后端/迁移/测试改动；check/typecheck/test 全绿（463 用例）。指纹快照存任务 research/claude-code-fingerprint.md，spec 判断无需更新。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3eccf76` | (see git log) |
+| `666c6fa` | (see git log) |
+
+### Status
+
+[OK] **Completed**

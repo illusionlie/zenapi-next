@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
-- **Last Active**: 2026-09-20
+- **Total Sessions**: 17
+- **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~445 | Active |
+| `journal-1.md` | ~519 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-09-29 | 新增 Claude Code 客户端伪装预设 | `3eccf76`, `666c6fa` | `main` |
 | 16 | 2026-09-20 | Chat Completions↔Anthropic Messages 转换器补全 | `cfca96a`, `15cdc7e` | `main` |
 | 15 | 2026-09-19 | 登录注册接入 Cloudflare Turnstile 人机验证 | `d66c9d1`, `8cf65ac` | `main` |
 | 14 | 2026-09-19 | 用户端监控改为模型可用性并收紧 monitoring 鉴权 | `b7cd4d5`, `e09928f` | `main` |
