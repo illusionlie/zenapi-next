@@ -521,6 +521,10 @@ Here is some useful information about the environment you are running in:
   Today's date: Thu Jan 01 2026
 </env>`;
 
+const CLAUDE_CODE_PROMPT = `x-anthropic-billing-header: cc_version=2.1.226.b94; cc_entrypoint=sdk-cli;
+
+You are a Claude agent, built on Anthropic's Claude Agent SDK.`;
+
 export const CLIENT_PRESETS: ClientPreset[] = [
 	{
 		id: "cline",
@@ -631,5 +635,36 @@ export const CLIENT_PRESETS: ClientPreset[] = [
 			"UA 双版本号（ai-sdk/provider-utils、runtime/bun）随 opencode 发布漂移，需手工刷新；" +
 			"提示词 env 块与模型行为中性快照值（日期/目录/模型名非真实值），均可手改。" +
 			"⚠ 不适用于 opencode zen 免费额度——其校验已含 body 规则（stream:true + bash tool + tools≥2），超出头部伪装能力范围。",
+	},
+	{
+		id: "claude-code",
+		name: "Claude Code 2.1.226",
+		headers: {
+			accept: "application/json",
+			"anthropic-version": "2023-06-01",
+			"anthropic-dangerous-direct-browser-access": "true",
+			"anthropic-beta":
+				"claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24",
+			"user-agent": "claude-cli/2.1.226 (external, sdk-cli)",
+			"x-app": "cli",
+			"x-claude-code-session-id": "{{uuid}}",
+			"x-stainless-retry-count": "0",
+			"x-stainless-timeout": "600",
+			"x-stainless-lang": "js",
+			"x-stainless-package-version": "0.94.0",
+			"x-stainless-os": "MacOS",
+			"x-stainless-arch": "arm64",
+			"x-stainless-runtime": "node",
+			"x-stainless-runtime-version": "v26.3.0",
+		},
+		systemPrompt: CLAUDE_CODE_PROMPT,
+		note:
+			"第三方逆向仓库锚定（pi-anaouter-cc @ d46b8f3，其值经「capture server 抓真实 Claude Code 请求 → diff 刷新」管线校准；完整快照见任务 09-29-claude-code-disguise-preset research/claude-code-fingerprint.md）。" +
+			"版本锚点：Claude Code 2.1.226（build 2.1.226.b94）/ anthropic SDK（stainless）0.94.0 / node v26.3.0 / MacOS arm64——版本常量为随 CC 发布漂移的活值（git 史 5 个月换 5 版），UA 版本段与 9-flag anthropic-beta 串需手工刷新。" +
+			"x-claude-code-session-id 为 {{uuid}} 动态模板占位符，网关每上游请求实时解析（对应真实 CC 每请求 randomUUID()）；x-stainless-retry-count 固定 0（真实 CC 随重试轮次递增）。" +
+			"省略 authorization / x-api-key（由渠道密钥体系管理，预设不得覆盖内置鉴权头）与 content-type（由代理按实际请求体设置）；system 三块结构仅承载前两块（billing 行 + SDK 身份行，第三块为业务 prompt 由注入函数拼接），cache_control（ephemeral）差异无法用单条 systemPrompt 表达。" +
+			"⚠ 上游若校验 body 形状——metadata.user_id（JSON 字符串 device_id/account_uuid/session_id）、context_management.edits、?beta=true 查询参数、工具名 PascalCase 映射——超出本伪装体系（头 + 单条 systemPrompt）能力范围；主要面向 anthropic 格式渠道。" +
+			"指纹来自第三方逆向仓库，未经本项目自有抓包验证，故标「测试」。",
+		testing: true,
 	},
 ];
