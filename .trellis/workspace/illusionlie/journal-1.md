@@ -517,3 +517,29 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 缓存命中率统计与双端仪表盘可视化
+
+**Date**: 2026-10-19
+**Task**: 缓存命中率统计与双端仪表盘可视化
+**Branch**: `main`
+
+### Summary
+
+usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 0024，NULL = 上游未报告，不用 0 表示无数据）；normalizeUsage 建立缓存命中四级优先链与纯 Anthropic 形态 prompt 折算（防转换产物二次叠加），parseUsageFromSse 改 raw 层逐字段合并（保住 message_start 的 input/cache 字段，OpenAI 终端 chunk 与旧 last-wins 等价）；管理端/用户端仪表盘新增缓存命中率卡片与每日趋势（NULL ≠ 0 分母，无数据显 —，零依赖 mini bar）。门禁全绿（481 用例），check 验收 6 条全过。新增 spec usage-accounting.md（解析→落库→聚合完整口径契约）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `766e5e0` | (see git log) |
+| `b66f494` | (see git log) |
+| `4a371ac` | (see git log) |
+| `8cc2273` | (see git log) |
+| `a5a9b98` | (see git log) |
+| `97fc127` | (see git log) |
+
+### Status
+
+[OK] **Completed**
