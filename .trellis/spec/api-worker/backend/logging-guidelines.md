@@ -6,7 +6,7 @@
 
 ## Overview
 
-Worker 端**没有日志库**，统一使用 `console.*`（Cloudflare Workers 的 `console.*` 会输出到 wrangler tail / Workers Logs）。全仓仅 3 处日志调用点，均为 `console.log` + 方括号前缀标签的结构化形态。**不要引入 pino/winston 等日志库**——Workers 环境没有文件句柄，原生 console 即是平台惯例。
+Worker 端**没有日志库**，统一使用 `console.*`（Cloudflare Workers 的 `console.*` 会输出到 wrangler tail / Workers Logs）。日志调用点为方括号前缀标签 + 结构化载荷的形态（`console.log` 为主，另有 1 处 P0 批准的计费收尾 `console.error` 例外，见下）。**不要引入 pino/winston 等日志库**——Workers 环境没有文件句柄，原生 console 即是平台惯例。
 
 ---
 
@@ -26,9 +26,9 @@ Worker 端**没有日志库**，统一使用 `console.*`（Cloudflare Workers �
 
 ### Convention: 失败路径靠 jsonError 返回给客户端，不靠日志
 
-**What**: 当前代码**零** `console.error` / `console.warn`。错误统一经 `utils/http.ts` 的 `jsonError(c, status, message, code?)` 返回；上游渠道失败详情记入 `usage_logs` 表（含 status/error 信息）而非打印。
+**What**: 错误统一经 `utils/http.ts` 的 `jsonError(c, status, message, code?)` 返回；上游渠道失败详情记入 `usage_logs` 表（含 status/error 信息）而非打印。**已批准例外（2026-10-19 P0）**：`services/usage.ts` 计费 batch 失败走 `console.error("[usage] billing batch failed", { ... })`——该失败发生在响应已交给客户端之后（waitUntil 收尾），jsonError 无处可返，日志是唯一可见性手段。
 
-**Why**: Workers 无持久 stderr，落库才是可查询的事实来源。调试期可临时 `console.log`，但提交前应移除或转为落库字段。
+**Why**: Workers 无持久 stderr，落库才是可查询的事实来源。调试期可临时 `console.log`，但提交前应移除或转为落库字段。「响应后收尾失败」类日志须遵循同一形态（`[tag]` 前缀 + 平面载荷），且不得用于能把错误返回客户端的场景。
 
 ---
 
@@ -47,4 +47,5 @@ Worker 端**没有日志库**，统一使用 `console.*`（Cloudflare Workers �
 | 请求进出 | `hono/logger` + `[request]` 中间件（已有，勿重复） |
 | 关键业务事件（usage 记账、重试换渠道） | `console.log("[tag]", {...})` 或落库 |
 | 错误返回客户端 | `jsonError()`，不打印 |
+| 响应后收尾失败（计费 batch 等，waitUntil 内） | `console.error("[tag]", {...})`，不 rethrow |
 | 可查询的失败历史 | `usage_logs` 表字段 |

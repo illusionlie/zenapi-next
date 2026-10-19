@@ -21,6 +21,7 @@ type NormalizedUsage = {
 
 // services/usage.ts — usage_logs 两列：cached_input_tokens / cache_creation_tokens INTEGER 可空
 // 迁移 0024_usage_cache_tokens.sql；recordUsage INSERT 19 列，NULL 直通
+// 计费三写（INSERT + quota + balance）经单次 db.batch 原子执行，余额钳制不为负 → 见 §8
 ```
 
 ## 3. Contracts
@@ -83,4 +84,67 @@ usage = candidate; // 每次整体替换
 // raw 层逐字段合并后一次性 normalize
 mergeRawUsage(acc, extractRawUsage(parsed)); // 非 null 覆盖
 // normalizeUsage 内按 §3.2 条件折算 prompt，cache_read/creation 落库为独立列
+```
+
+## 8. 计费原子化契约（2026-10-19 P0 增补）
+
+### 8.1 Scope / Trigger
+
+- 触发：改动 `recordUsage` 写入形态、计费语句组装、余额扣减语义。DB 写路径 + 跨层契约变更。
+
+### 8.2 Signatures
+
+```ts
+// services/usage.ts
+type UsageInput = {
+	// ...既有 19 列字段不变
+	cost?: number | null;      // 与 INSERT 的 cost 列同值，复用不另设
+	userId?: string | null;    // 计费主体（users.id 为 TEXT 列）
+};
+// recordUsage 组装 [INSERT usage（恒有）+ UPDATE tokens.quota_used（tokenId && totalTokens）
+//                + UPDATE users.balance（userId && cost > 0）] → 单次 env.DB.batch(statements)
+```
+
+### 8.3 Contracts
+
+- **batch = 单事务**（D1 batch 语义）：三写同生共死，不存在「记了日志没扣费」中间态。
+- 余额 SQL 固定为 `UPDATE users SET balance = MAX(0, balance - ?), updated_at = ? WHERE id = ?`：**钳制不为负**（2026-10-19 用户决策）；`usage_logs.cost` 记真实成本，差额 = cost − Δbalance 仅发生在余额不足边缘场景，可对账审计；正常路径最终态与旧三写形态完全一致。
+- quota 条件照旧（`tokenId && totalTokens`，无条件累加）；并发上浮有界 = 在途数 × 单次增量，AGENTS §8 文档化，不做条件更新。
+- 失败：`console.error("[usage] billing batch failed", { tokenId, userId, cost, error })`，**不 rethrow**——计费收尾失败不影响已成功的上游响应（logging-guidelines 已批准例外）。
+- 调用方（`routes/proxy.ts` / `routes/anthropic-proxy.ts`）只算 cost 并传 `userId`，**禁止**在路由层自行扣余额；错误路径零值 INSERT 不带 userId/cost（即单语句 batch 形态）。
+
+### 8.4 Validation & Error Matrix
+
+| 条件 | 行为 |
+|------|------|
+| 无 tokenId / totalTokens = 0 | 无 quota 语句，其余照常 |
+| cost = 0 或无 userId | 无 balance 语句 |
+| batch 任一语句失败 | 整批回滚 + `[usage]` console.error，调用方 promise 正常 resolve |
+| balance < cost | 扣至 0，`usage_logs.cost` 记真实值 |
+
+### 8.5 Good/Base/Bad Cases
+
+- Good：正常计费请求 → 三语句一批落库；余额充足时最终态与旧三写独立形态逐字段一致。
+- Base：错误路径零值记录 → 单语句 batch（无 quota/balance 语句），INSERT 失败仅日志不抛。
+- Bad：路由层恢复独立 `UPDATE users SET balance = balance - ?`（无钳制、脱离事务）；把 `[usage]` 失败改成 rethrow（已成功的上游响应会变 5xx）；钳制差额改写 usage_logs.cost（破坏真实成本口径）。
+
+### 8.6 Tests Required
+
+`tests/usage-billing.test.ts`：三语句形态与逐位绑定（含 `MAX(0, balance - ?)` SQL 文本 toBe 断言）、条件省略三分支、batch reject → console.error 载荷断言 + `resolves.toBeUndefined()` + 成功路径静默。锚点：cost=0.5 且余额不足时 balance 绑定 `[0]`。
+
+### 8.7 Wrong vs Correct
+
+#### Wrong（修复前）
+
+```ts
+await db.prepare("INSERT INTO usage_logs ...").run();          // 三条独立语句
+await db.prepare("UPDATE tokens SET quota_used = quota_used + ?").run();
+await db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(); // 无守卫，并发可深度负数
+```
+
+#### Correct
+
+```ts
+await env.DB.batch([insertUsage, quotaStmt, balanceStmt]); // 单事务；balance 用 MAX(0, balance - ?)
+// 失败：console.error("[usage] billing batch failed", ...) 不 rethrow
 ```
