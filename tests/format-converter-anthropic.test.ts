@@ -674,6 +674,8 @@ describe("createAnthropicToOpenaiStreamTransform", () => {
 			totalTokens: 16,
 			promptTokens: 11,
 			completionTokens: 5,
+			cachedInputTokens: 2,
+			cacheCreationTokens: null,
 		});
 		expect(parsed.usage?.promptTokens).toBeGreaterThan(0);
 	});

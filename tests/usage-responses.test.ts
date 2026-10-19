@@ -22,6 +22,8 @@ describe("parseUsageFromJson - Responses API response.usage", () => {
 			totalTokens: 46,
 			promptTokens: 12,
 			completionTokens: 34,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 
@@ -39,6 +41,8 @@ describe("parseUsageFromJson - Responses API response.usage", () => {
 			totalTokens: 10,
 			promptTokens: 7,
 			completionTokens: 3,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 
@@ -66,6 +70,8 @@ describe("parseUsageFromJson - Responses API response.usage", () => {
 			totalTokens: 7,
 			promptTokens: 5,
 			completionTokens: 2,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 
@@ -83,6 +89,8 @@ describe("parseUsageFromJson - Responses API response.usage", () => {
 			totalTokens: 12,
 			promptTokens: 8,
 			completionTokens: 4,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 
@@ -105,6 +113,8 @@ describe("parseUsageFromJson - Responses API response.usage", () => {
 			totalTokens: 2,
 			promptTokens: 1,
 			completionTokens: 1,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 });
@@ -121,6 +131,8 @@ describe("normalizeUsage - Responses token naming", () => {
 			totalTokens: 33,
 			promptTokens: 11,
 			completionTokens: 22,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 });
@@ -146,6 +158,8 @@ describe("parseUsageFromSse - Responses stream", () => {
 			totalTokens: 10,
 			promptTokens: 7,
 			completionTokens: 3,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 
@@ -167,6 +181,8 @@ describe("parseUsageFromSse - Responses stream", () => {
 			totalTokens: 10,
 			promptTokens: 9,
 			completionTokens: 1,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 });

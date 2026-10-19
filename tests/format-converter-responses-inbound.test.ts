@@ -985,6 +985,8 @@ describe("createOpenaiToResponsesStreamTransform", () => {
 			totalTokens: 7,
 			promptTokens: 5,
 			completionTokens: 2,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
 		});
 	});
 });
