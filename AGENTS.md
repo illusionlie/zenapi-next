@@ -121,6 +121,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 - usage 记录：输入/输出 tokens、首 token 延迟、流式标记、推理强度（取自请求体 `reasoning` / `reasoning_effort`）；缓存命中 `cached_input_tokens`（优先级 `prompt_tokens_details.cached_tokens` → `input_tokens_details.cached_tokens` → `prompt_cache_hit_tokens` → `cache_read_input_tokens`）与缓存写入 `cache_creation_tokens`（仅 Anthropic 语义，不进命中率分子），NULL = 上游未报告；`prompt_tokens` 全路径口径统一为含缓存总输入——纯 Anthropic 形态（prompt 取自 `input_tokens` 别名且存在 cache 字段）折算 `input + cache_read + cache_creation`，OpenAI 形态 / 转换产物不二次叠加；流式 SSE usage 逐字段合并（非 null 覆盖、缺失保留），保住 `message_start` 的 input/cache 字段。
 - **计费原子性**：`recordUsage` 把 INSERT usage_logs + UPDATE tokens.quota_used + UPDATE users.balance 组装为**单次 `db.batch`**（D1 batch = 单事务，三写同生共死，无「记日志未扣费」中间态）；余额扣减为 `balance = MAX(0, balance - cost)` **钳制不为负**（余额不足时平台吸收单请求差额，`usage_logs.cost` 仍记真实成本，差额可对账审计）；quota 语义不变（预检 + 无条件累加，并发上浮有界 = 在途请求数 × 单次增量）；batch 失败 `console.error("[usage] billing batch failed", …)` 不影响已成功的上游响应。调用方（proxy / anthropic-proxy）只算 cost 并传 `userId`，**不得**在路由层自行扣余额。
 - **热路径缓存与异步收尾**：活跃渠道/模型别名 10s、代理 settings（头策略 + 重试配置）30s 的 isolate 内存 TTL 缓存（`utils/cache.ts`，惰性过期，消费方对缓存行**只读**）——管理台变更的生效陈旧窗口即 TTL（渠道/别名 ≤10s、settings ≤30s）；**token 鉴权永不缓存**（tokens+users JOIN 单查，显式列清单 + `user_*` 别名）；非流式与错误路径的 usage 写入经 `runPostResponse`（waitUntil）响应后收尾，不阻塞返回，executionCtx 缺失时降级 fire-and-forget + 记日志。
+- **用量预聚合与维护**：`usage_stats_daily`（日粒度 model×channel×token×user，UTC 日切）承载往日统计；仪表盘/监测/模型页的跨日窗口 = rollup 段（≤昨日）+ 当日 raw 段并集（`splitWindow` 两段严格不相交；`to` 落在往日按整天近似计入，起点整天同理）。Cron `03:17 UTC`（wrangler.toml `[triggers]`）每日执行：rollup 昨日 → 分批 retention 清理原始日志 → 清理过期 sessions → rollup 表 180d 保留期清理，单步失败不阻断。手动端点：`POST /api/dashboard/rollup`（单日 / 空体全量缺失回填）、`POST /api/usage/prune`。**防丢守卫**：`rollupDate` 对「原始行已清且 rollup 行存在」的日期 no-op，永不把幸存统计删空。
 - usage 解析兼容 Responses 格式：SSE `response.completed` 事件的 `response.usage` 路径；`input_tokens/output_tokens` 归一为 prompt/completion tokens。
 - **禁用的模型不参与路由匹配**，也不出现在 `/v1/models`。
 - **用户级可用模型白名单**：`users.allowed_models`（JSON 数组，空 = 不限制）；按请求模型名**精确匹配**，白名单外返回 403 `model_not_allowed`；`/v1/models` 与 `/api/u/models` 同步过滤；与令牌级 `allowed_channels` 相互独立、正交生效。
@@ -135,7 +136,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 
 `apps/worker/src/db/schema.sql` 定义全部表。核心域：
 
-- **代理**：`channels`（含 `api_formats` 多格式能力声明 + `api_format` 镜像首元素 + `endpoint_overrides` 每格式端点覆盖）、`tokens`（含 `allowed_models` 令牌级白名单）、`usage_logs`（含 `cached_input_tokens` / `cache_creation_tokens` 缓存列，NULL = 上游未报告）、`model_aliases`、`channel_model_aliases`
+- **代理**：`channels`（含 `api_formats` 多格式能力声明 + `api_format` 镜像首元素 + `endpoint_overrides` 每格式端点覆盖）、`tokens`（含 `allowed_models` 令牌级白名单）、`usage_logs`（含 `cached_input_tokens` / `cache_creation_tokens` 缓存列，NULL = 上游未报告）、`usage_stats_daily`（日粒度预聚合，rollup 180d 保留）、`model_aliases`、`channel_model_aliases`
 - **会话/设置**：`admin_sessions`、`settings`
 - **用户体系**：`users`（含 `allowed_models` 白名单）、`user_sessions`、`user_checkins`、`invite_codes`
 - **资金**：`recharge_orders`

@@ -18,7 +18,7 @@
 | [Format Conversion](./format-conversion.md) | 协议转换器契约（chat↔anthropic、chat↔responses 双向）：usage 末 chunk 惯例与口径换算、thinking 映射、fail-open 部件丢弃、流式不变量 | ✅ Filled |
 | [Channel Routing](./channel-routing.md) | 渠道多格式能力声明与统一路由矩阵（api_formats 双写、偏好序 selectTargetFormat、base_url 规范化、探测并集契约） | ✅ Filled |
 | [PATCH Update Semantics](./patch-update-semantics.md) | 资源更新三态语义（undefined保留/null清除/值设置）与纯函数 resolver 模式 | ✅ Filled |
-| [Usage Accounting](./usage-accounting.md) | usage 解析→落库→聚合口径（缓存字段优先级链、Anthropic 折算防二次叠加、SSE raw 层逐字段合并、NULL≠0 分母、计费 batch 原子化与余额钳制 §8） | ✅ Filled |
+| [Usage Accounting](./usage-accounting.md) | usage 解析→落库→聚合口径（缓存字段优先级链、Anthropic 折算防二次叠加、SSE raw 层逐字段合并、NULL≠0 分母、计费 batch 原子化与余额钳制 §8、预聚合两段拼装与防丢守卫 §9） | ✅ Filled |
 | [Turnstile Auth](./turnstile-auth.md) | 登录入口人机验证契约（enforceTurnstile 接线、fail-open 边界、secret 零回显、错误码族） | ✅ Filled |
 
 ---

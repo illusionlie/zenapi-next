@@ -148,3 +148,32 @@ await db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(); /
 await env.DB.batch([insertUsage, quotaStmt, balanceStmt]); // 单事务；balance 用 MAX(0, balance - ?)
 // 失败：console.error("[usage] billing batch failed", ...) 不 rethrow
 ```
+
+## 9. 预聚合与维护契约（2026-10-19 P2 增补）
+
+### 9.1 Scope / Trigger
+
+- 触发：改动 `usage_stats_daily` 结构、rollup/清理任务、聚合端点的 rollup+raw 两段拼装。
+
+### 9.2 Signatures
+
+```ts
+// services/usage-stats.ts
+splitWindow(fromIso: string, toIso: string): { rollupFrom: string; rollupTo: string; rawFrom: string; rawTo: string };
+// 两段严格不相交：rollup 段 stat_date ≤ 昨日（UTC），raw 段 created_at ≥ 今日零点；to 落在往日按整天近似计入
+rollupDate(db, date: string): Promise<void>;   // 同日先 DELETE 再 INSERT SELECT，幂等；防丢守卫见 9.3
+pruneUsageLogsBatched(db, beforeIso: string, chunk = 500): Promise<number>; // rowid IN + LIMIT 循环，可重入
+runDailyMaintenance(env): Promise<void>;       // cron 四步：rollup 昨日 → 原始日志 retention → sessions → rollup 180d
+```
+
+### 9.3 Contracts
+
+- **聚合口径承继**：rollup 表含 `cache_prompt_base` 列（§3.4 的 `SUM(CASE WHEN cached IS NOT NULL THEN prompt ELSE 0)` 逐日预算），两段合并后 `computeCacheRate` 口径与 raw 直查严格一致（NULL ≠ 0 不变）。
+- **两段不相交**：读取端永远钳制 rollup 段 ≤ 昨日、raw 段 ≥ 今日零点——管理员手动 rollup 今日也不会导致重复计数。
+- **`to` 边界整天近似**：`to` 落在往日时该日整天从 rollup 计入（旧 raw 直查是精确时间戳截断；date-only `to` 甚至语义相反）。shipped UI 从不传 `to`，仅影响外部 API 客户端，AGENTS §8 已注记。
+- **防丢守卫**：`rollupDate` 对「该日原始行已清且 rollup 行存在」直接 no-op——retention 清掉原始日志后，cron 重跑 / 显式单日回填都不得把幸存统计删空。
+- **cron 单步容错**：四步各自 try/catch `[rollup]`/`[retention]` console.error 继续；retention 读取走 `getRetentionDays` 三级回退（脏值回落默认 30，不会误清全表）。
+
+### 9.4 Tests Required
+
+`tests/usage-stats.test.ts`（node:sqlite 适配器）：rollup 幂等与防丢守卫（无原始行 + 有 rollup 行 → 重跑行存值不变；空集照常写）、日切边界、`rawSummaryTotals` legacy SQL 与两段并集逐项相等（80/110 cache 分母锚点）、prune 循环终止/可重入、runDailyMaintenance 单步失败不阻断。部署后人工步骤：`POST /api/dashboard/rollup` 空体全量回填 → cron 接管；`wrangler dev --test-scheduled` 观察四步日志。
