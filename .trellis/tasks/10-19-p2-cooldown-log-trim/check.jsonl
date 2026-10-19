@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "检查基线：门禁命令与禁则"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "校验冷却过滤未改变路由矩阵语义（资格判定、偏好序、fail-open 不提前 503）"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "校验新键回退链/clamp（布尔严格校验）与既有 settings 测试零回归"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "校验默认路径零 body 解析、开关开启恢复现状形态"}

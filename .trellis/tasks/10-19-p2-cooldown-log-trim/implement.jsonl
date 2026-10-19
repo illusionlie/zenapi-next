@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引：routes 薄壳 + services 下沉"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "候选资格与 selectTargetFormat 路由矩阵；冷却过滤作为候选资格前置，不得改变资格判定语义"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "新 settings 键 debug_request_body_log 的三级回退链与读宽写严契约"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "[request] 中间件形态、前缀标签惯例；开关两态下的日志行为"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁与禁则"}

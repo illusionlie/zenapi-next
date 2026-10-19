@@ -588,3 +588,25 @@ usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 00
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: P2 用量预聚合与保留策略 cron 化
+
+**Date**: 2026-10-19
+**Task**: P2：用量预聚合与保留策略 cron 化（高并发加固树 3/4）
+**Branch**: `main`
+
+### Summary
+
+迁移 0026 建 usage_stats_daily（日粒度 model×channel×token×user，UTC 日切，含 cache_prompt_base 分母承载列与 last_seen_at）；services/usage-stats.ts 承载 splitWindow / rollupDate（幂等 + 防丢守卫：原始行已清且有 rollup 行时 no-op）/ 分批 retention / sessions 清理 / runDailyMaintenance；index.ts 增 scheduled（03:17 UTC 四步单步容错）+ wrangler.toml triggers；dashboard/monitoring/models/user-api 四处聚合切「rollup 段（≤昨日）+ 当日 raw 段」并集，user-api 走冗余 user_id 列免 JOIN；手动端点 POST /api/dashboard/rollup（空体全量缺失回填，rollupMissingDates 防误删）与 POST /api/usage/prune。新增 25 用例共 543 全绿；check 复核确认两段不相交与 80/110 cache 分母锚点、并修正 verification 计数。check 提出 #1 显式单日回填数据丢失脚枪已由守卫修复（+2 用例）。决策记录：AC-2「数十万行基准数值」沙箱不可造数，复判为以 EXPLAIN 查询计划证据替代（verification §3），部署后可补测。运行时手验（cron 触发、切表前后数值抽样）deferred to user，步骤在 verification §8。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `46e3d8c` | (see git log) |
+| `29d6c03` | (see git log) |
+
+### Status
+
+[OK] **Completed**
