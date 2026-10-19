@@ -23,7 +23,8 @@ export type ProxyHeaderPolicy = {
 };
 export function parseExtraHeaders(raw: string | null | undefined): Record<string, string> | null;
 export function parseRemoveHeaders(raw: string | null | undefined): string[] | null;
-export async function loadProxyHeaderPolicy(db: D1Database): Promise<ProxyHeaderPolicy>;
+export function parseHeaderPolicyFromRaw(raw: Record<string, string | null>): ProxyHeaderPolicy; // 2026-10-19 P1 起：代理热路径入口，纯解析（配合 loadProxySettingsCached 的 30s TTL 缓存）
+export async function loadProxyHeaderPolicy(db: D1Database): Promise<ProxyHeaderPolicy>; // 直读 db；生产代理路径已改走 parseHeaderPolicyFromRaw，本函数保留给直读场景与既有测试锚定
 export function applyHeaderPolicy(
 	headers: Headers,
 	policy: ProxyHeaderPolicy | null,

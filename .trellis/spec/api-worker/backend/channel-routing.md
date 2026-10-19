@@ -56,6 +56,8 @@ export function resolveEndpointBaseUrl(
 
 `custom` 在偏好序末位仅防御（写侧已禁组合）；**responses↔anthropic 转换不存在**，两侧互斥由 selectTargetFormat 的 null 返回表达，不得在路由层另写特判。
 
+> **2026-10-19 P1 起**：代理热路径的活跃渠道列表经 `getActiveChannelsCached`（`services/channels.ts`）10s TTL 缓存供给；缓存行**只读共享**，消费方（`createWeightedOrder` / `resolveChannelRoute` / routing）不得变异（现状均为副本/浅拷贝/只读访问）。管理台渠道 CRUD 的生效陈旧窗口 ≤10s（AGENTS §8）。资格判定与 selectTargetFormat 契约不受缓存影响——缓存的只是「从哪读行」，不是「怎么判格式」。
+
 ### 3.2 双写与读侧兜底
 
 - 写：repo 层 `toApiFormatColumns` 同时产 `api_formats`（全量 JSON）与 `api_format`（规范序首元素）；**调用方只传 `api_formats`，禁止手工同步镜像**。
