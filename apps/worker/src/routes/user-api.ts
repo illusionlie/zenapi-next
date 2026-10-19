@@ -11,6 +11,14 @@ import {
 	getLdcPaymentEnabled,
 } from "../services/settings";
 import { resolveUserTokenUpdate } from "../services/token-update";
+import {
+	loadModelDailyTrends,
+	loadModelRequestStats,
+	loadUserDailyUsage,
+	loadUserUsageTotals,
+	loadWindowTotals,
+	splitWindow,
+} from "../services/usage-stats";
 import { generateToken, sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import {
@@ -113,58 +121,55 @@ userApi.get("/models", async (c) => {
 userApi.get("/monitoring", async (c) => {
 	const range = c.req.query("range") ?? "7d";
 	const config = resolveMonitoringRange(range);
-	const since = new Date(Date.now() - config.ms).toISOString().slice(0, 19);
-	const slotExpr = `substr(created_at, 1, ${config.sqlSlice})`;
+	const now = new Date();
+	const since = new Date(now.getTime() - config.ms).toISOString().slice(0, 19);
+	// Two-segment assembly (platform-wide, same as admin monitoring): complete
+	// past days from usage_stats_daily, today's rows from usage_logs. Trend
+	// slots use the rollup only when the slot size is a full day.
+	const split = splitWindow(since, null, now);
 
 	// Per-model aggregates within the selected range
-	const modelRows = await c.env.DB.prepare(
-		`SELECT
-			COALESCE(model, 'unknown') AS model,
-			COUNT(*) AS total_requests,
-			COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) AS success_count,
-			COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS error_count,
-			COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
-			MAX(created_at) AS last_seen
-		FROM usage_logs
-		WHERE created_at >= ?
-		GROUP BY model
-		ORDER BY total_requests DESC`,
-	)
-		.bind(since)
-		.all();
+	const modelAggs = await loadModelRequestStats(c.env.DB, split);
+	const modelRows = modelAggs.map((row) => ({
+		model: row.model,
+		total_requests: row.total_requests,
+		success_count: row.total_requests - row.error_count,
+		error_count: row.error_count,
+		avg_latency_ms:
+			row.total_requests > 0 ? row.latency_sum / row.total_requests : 0,
+		last_seen: row.last_seen,
+	}));
 
 	// Per-model × time-slot trends within the selected range
-	const trendRows = await c.env.DB.prepare(
-		`SELECT
-			COALESCE(model, 'unknown') AS model,
-			${slotExpr} AS day,
-			COUNT(*) AS requests,
-			SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors,
-			COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
-		FROM usage_logs
-		WHERE created_at >= ?
-		GROUP BY model, day
-		ORDER BY day DESC, requests DESC`,
-	)
-		.bind(since)
-		.all();
+	const trendAggs = await loadModelDailyTrends(
+		c.env.DB,
+		since,
+		split,
+		config.sqlSlice,
+	);
+	const trendRows = trendAggs.map((row) => ({
+		model: row.model,
+		day: row.day,
+		requests: row.requests,
+		success: row.requests - row.errors,
+		errors: row.errors,
+		avg_latency_ms: row.requests > 0 ? row.latency_sum / row.requests : 0,
+	}));
 
 	// Global aggregates within the selected range
-	const globalRow = await c.env.DB.prepare(
-		`SELECT
-			COUNT(*) AS total_requests,
-			COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) AS total_success,
-			COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS total_errors,
-			COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
-		FROM usage_logs
-		WHERE created_at >= ?`,
-	)
-		.bind(since)
-		.first();
+	const globalTotals = await loadWindowTotals(c.env.DB, split);
+	const globalRow = {
+		total_requests: globalTotals.total_requests,
+		total_success: globalTotals.total_requests - globalTotals.total_errors,
+		total_errors: globalTotals.total_errors,
+		avg_latency_ms:
+			globalTotals.total_requests > 0
+				? globalTotals.latency_sum / globalTotals.total_requests
+				: 0,
+	};
 
 	// Always query last 15 minutes for system status
-	const recentSince = new Date(Date.now() - 15 * 60_000)
+	const recentSince = new Date(now.getTime() - 15 * 60_000)
 		.toISOString()
 		.slice(0, 19);
 	const recentRow = await c.env.DB.prepare(
@@ -199,9 +204,9 @@ userApi.get("/monitoring", async (c) => {
 
 	return c.json(
 		buildModelMonitoring({
-			modelRows: modelRows.results ?? [],
-			trendRows: trendRows.results ?? [],
-			globalRow: globalRow ?? null,
+			modelRows,
+			trendRows,
+			globalRow,
 			recentRow: recentRow ?? null,
 			recentModelRows: recentModelRows.results ?? [],
 			allowlist,
@@ -471,56 +476,18 @@ function computeCacheRate(
 }
 
 /**
- * Returns dashboard data for the current user.
+ * Returns dashboard data for the current user. Full-history aggregates read
+ * complete past days from usage_stats_daily by the rollup's redundant
+ * user_id column (no tokens JOIN — attribution survives token deletion) and
+ * merge today's raw rows attributed via the live tokens JOIN.
  */
 userApi.get("/dashboard", async (c) => {
 	const userId = c.get("userId") as string;
 	const user = c.get("userRecord") as UserRecord;
+	const split = splitWindow(null, null);
 
-	const summary = await c.env.DB.prepare(
-		`SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(u.total_tokens), 0) as total_tokens,
-			COALESCE(SUM(u.cost), 0) as total_cost,
-			COALESCE(SUM(u.cached_input_tokens), 0) as cached_tokens,
-			COALESCE(SUM(u.cache_creation_tokens), 0) as cache_creation_tokens,
-			COALESCE(SUM(CASE WHEN u.cached_input_tokens IS NOT NULL THEN u.prompt_tokens ELSE 0 END), 0) as cache_prompt_base
-		FROM usage_logs u
-		JOIN tokens t ON u.token_id = t.id
-		WHERE t.user_id = ?`,
-	)
-		.bind(userId)
-		.first<{
-			total_requests: number;
-			total_tokens: number;
-			total_cost: number;
-			cached_tokens: number;
-			cache_creation_tokens: number;
-			cache_prompt_base: number;
-		}>();
-
-	const recentUsage = await c.env.DB.prepare(
-		`SELECT
-			DATE(u.created_at) as day,
-			COUNT(*) as requests,
-			COALESCE(SUM(u.cost), 0) as cost,
-			COALESCE(SUM(u.cached_input_tokens), 0) as cached_tokens,
-			COALESCE(SUM(CASE WHEN u.cached_input_tokens IS NOT NULL THEN u.prompt_tokens ELSE 0 END), 0) as cache_prompt_base
-		FROM usage_logs u
-		JOIN tokens t ON u.token_id = t.id
-		WHERE t.user_id = ?
-		GROUP BY DATE(u.created_at)
-		ORDER BY day DESC
-		LIMIT 30`,
-	)
-		.bind(userId)
-		.all<{
-			day: string;
-			requests: number;
-			cost: number;
-			cached_tokens: number;
-			cache_prompt_base: number;
-		}>();
+	const summaryRow = await loadUserUsageTotals(c.env.DB, userId, split);
+	const recentUsage = await loadUserDailyUsage(c.env.DB, userId, split);
 
 	const checkinReward = await getCheckinReward(c.env.DB);
 	const ldcPaymentEnabled = await getLdcPaymentEnabled(c.env.DB);
@@ -533,15 +500,6 @@ userApi.get("/dashboard", async (c) => {
 		.first();
 	const checkedInToday = Boolean(checkinRow);
 
-	const summaryRow = summary ?? {
-		total_requests: 0,
-		total_tokens: 0,
-		total_cost: 0,
-		cached_tokens: 0,
-		cache_creation_tokens: 0,
-		cache_prompt_base: 0,
-	};
-
 	return c.json({
 		balance: user.balance,
 		total_requests: summaryRow.total_requests,
@@ -553,7 +511,7 @@ userApi.get("/dashboard", async (c) => {
 			summaryRow.cached_tokens,
 			summaryRow.cache_prompt_base,
 		),
-		recent_usage: (recentUsage.results ?? []).map((row) => ({
+		recent_usage: recentUsage.map((row) => ({
 			day: row.day,
 			requests: row.requests,
 			cost: row.cost,

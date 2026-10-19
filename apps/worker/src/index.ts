@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import type { AppEnv } from "./env";
+import type { AppEnv, Bindings } from "./env";
 import { adminAuth } from "./middleware/adminAuth";
 import adminUserRoutes from "./routes/admin-users";
 import anthropicProxyRoutes from "./routes/anthropic-proxy";
@@ -24,6 +24,7 @@ import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
 import userApiRoutes from "./routes/user-api";
 import userAuthRoutes from "./routes/user-auth";
+import { runDailyMaintenance } from "./services/usage-stats";
 
 const app = new Hono<AppEnv>({ strict: false });
 
@@ -187,4 +188,19 @@ app.notFound(async (c) => {
 	return assets.fetch(new Request(url.toString(), c.req.raw));
 });
 
-export default app;
+/**
+ * Daily cron handler (03:17 UTC, wrangler.toml [triggers]): rollup yesterday,
+ * then batched prunes (raw logs / expired sessions / old rollups). Steps are
+ * fault-isolated inside runDailyMaintenance. Direct await — a cron invocation
+ * keeps the isolate alive for the whole chain (15-minute wall clock budget).
+ */
+const scheduled = (
+	_event: ScheduledEvent,
+	env: Bindings,
+	_ctx: ExecutionContext,
+): Promise<void> => runDailyMaintenance(env.DB);
+
+export default {
+	fetch: app.fetch,
+	scheduled,
+};

@@ -74,6 +74,33 @@ CREATE INDEX IF NOT EXISTS usage_logs_created_at ON usage_logs(created_at);
 CREATE INDEX IF NOT EXISTS usage_logs_token_created ON usage_logs(token_id, created_at);
 CREATE INDEX IF NOT EXISTS usage_logs_channel_created ON usage_logs(channel_id, created_at);
 
+-- usage_stats_daily: usage_logs 每日预聚合（粒度 stat_date + model +
+--   channel_id + token_id，user_id 为冗余列）。写入走
+--   services/usage-stats.ts rollupDate（同 stat_date 先 DELETE 再 INSERT
+--   SELECT，幂等）；列口径详见迁移 0026 头注释。
+CREATE TABLE IF NOT EXISTS usage_stats_daily (
+  id TEXT PRIMARY KEY,
+  stat_date TEXT NOT NULL,
+  model TEXT,
+  channel_id TEXT,
+  token_id TEXT,
+  user_id TEXT,
+  requests INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_prompt_base INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS usage_stats_daily_date ON usage_stats_daily(stat_date);
+CREATE INDEX IF NOT EXISTS usage_stats_daily_user_date ON usage_stats_daily(user_id, stat_date);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

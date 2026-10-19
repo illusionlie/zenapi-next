@@ -1,0 +1,1009 @@
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import type { D1Database } from "@cloudflare/workers-types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import dashboardRoutes from "../apps/worker/src/routes/dashboard";
+import modelsRoutes from "../apps/worker/src/routes/models";
+import monitoringRoutes from "../apps/worker/src/routes/monitoring";
+import {
+	addUtcDays,
+	loadDashboardDaily,
+	loadDashboardSummary,
+	loadModelDailyUsage,
+	loadModelUsageTotals,
+	loadUserDailyUsage,
+	loadUserUsageTotals,
+	pruneExpiredSessions,
+	pruneRollup,
+	pruneUsageLogsBatched,
+	rollupDate,
+	runDailyMaintenance,
+	splitWindow,
+	utcDateOf,
+} from "../apps/worker/src/services/usage-stats";
+
+// ---------------------------------------------------------------------------
+// In-memory SQLite D1 adapter (same shape D1 exposes: prepare/bind/run/all/
+// first/batch). Real SQL engine, no workerd — deterministic and sandbox-safe.
+// ---------------------------------------------------------------------------
+
+function createSqlite(): DatabaseSync {
+	const db = new DatabaseSync(":memory:");
+	db.exec(
+		readFileSync(
+			new URL("../apps/worker/src/db/schema.sql", import.meta.url),
+			"utf8",
+		),
+	);
+	db.exec(
+		readFileSync(
+			new URL("../apps/worker/migrations/0026_usage_stats_daily.sql", import.meta.url),
+			"utf8",
+		),
+	);
+	return db;
+}
+
+function makeD1(db: DatabaseSync): D1Database {
+	const makeStmt = (sql: string) => {
+		let bound: unknown[] = [];
+		const stmt = {
+			sql,
+			bind(...args: unknown[]) {
+				bound = args;
+				return stmt;
+			},
+			async run() {
+				const res = db.prepare(sql).run(...(bound as never[]));
+				return {
+					success: true,
+					results: [],
+					meta: { changes: Number(res.changes) },
+				};
+			},
+			async all() {
+				const rows = db.prepare(sql).all(...(bound as never[]));
+				return { results: rows as Array<Record<string, unknown>> };
+			},
+			async first() {
+				const row = db.prepare(sql).get(...(bound as never[]));
+				return (row ?? null) as unknown;
+			},
+		};
+		return stmt;
+	};
+	const d1 = {
+		prepare: (sql: string) => makeStmt(sql),
+		async batch(statements: Array<{ run(): Promise<unknown> }>) {
+			db.exec("BEGIN");
+			try {
+				const results: unknown[] = [];
+				for (const statement of statements) {
+					results.push(await statement.run());
+				}
+				db.exec("COMMIT");
+				return results;
+			} catch (e) {
+				db.exec("ROLLBACK");
+				throw e;
+			}
+		},
+	};
+	return d1 as unknown as D1Database;
+}
+
+let seq = 0;
+
+type LogOverrides = {
+	token_id?: string | null;
+	channel_id?: string | null;
+	model?: string | null;
+	total_tokens?: number | null;
+	prompt_tokens?: number | null;
+	completion_tokens?: number | null;
+	cached_input_tokens?: number | null;
+	cache_creation_tokens?: number | null;
+	cost?: number | null;
+	latency_ms?: number | null;
+	status?: string | null;
+	created_at?: string;
+};
+
+function insertLog(db: DatabaseSync, o: LogOverrides = {}): void {
+	db.prepare(
+		"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cached_input_tokens, cache_creation_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, error_code, error_message, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, ?, NULL, NULL, ?)",
+	).run(
+		`log_${++seq}`,
+		o.token_id ?? null,
+		o.channel_id ?? null,
+		o.model ?? null,
+		o.total_tokens ?? 0,
+		o.prompt_tokens ?? 0,
+		o.completion_tokens ?? 0,
+		o.cached_input_tokens ?? null,
+		o.cache_creation_tokens ?? null,
+		o.cost ?? 0,
+		o.latency_ms ?? 0,
+		o.status ?? "ok",
+		o.created_at!,
+	);
+}
+
+function insertToken(
+	db: DatabaseSync,
+	id: string,
+	userId: string | null,
+): void {
+	db.prepare(
+		"INSERT INTO tokens (id, name, key_hash, key_prefix, quota_total, quota_used, status, created_at, updated_at, user_id) VALUES (?, ?, 'h', 'p', NULL, 0, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', ?)",
+	).run(id, id, userId);
+}
+
+function insertChannel(db: DatabaseSync, id: string, name: string): void {
+	db.prepare(
+		"INSERT INTO channels (id, name, base_url, api_key, type, status, api_format, models_json, created_at, updated_at) VALUES (?, ?, 'https://up', 'k', 1, 'active', 'openai', ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+	).run(id, name, JSON.stringify([{ id: "m1", input_price: 1, output_price: 2 }]));
+}
+
+function insertRollupRow(db: DatabaseSync, statDate: string): void {
+	db.prepare(
+		"INSERT INTO usage_stats_daily (id, stat_date, model, requests) VALUES (?, ?, 'm1', 1)",
+	).run(`r_${++seq}`, statDate);
+}
+
+function countRows(db: DatabaseSync, sql: string): number {
+	return Number(db.prepare(sql).get().c);
+}
+
+// Legacy raw summary query (the pre-migration dashboard SQL shape) — the
+// consistency anchor the rollup merge must reproduce.
+function rawSummaryTotals(
+	db: DatabaseSync,
+	fromIso: string,
+): {
+	total_requests: number;
+	total_tokens: number;
+	cached_tokens: number;
+	cache_prompt_base: number;
+	total_errors: number;
+} {
+	const row = db
+		.prepare(
+			`SELECT COUNT(*) AS total_requests, COALESCE(SUM(total_tokens), 0) AS total_tokens,
+			COALESCE(SUM(cached_input_tokens), 0) AS cached_tokens,
+			COALESCE(SUM(CASE WHEN cached_input_tokens IS NOT NULL THEN prompt_tokens ELSE 0 END), 0) AS cache_prompt_base,
+			COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS total_errors
+			FROM usage_logs WHERE created_at >= ?`,
+		)
+		.get(fromIso) as Record<string, number>;
+	return {
+		total_requests: Number(row.total_requests),
+		total_tokens: Number(row.total_tokens),
+		cached_tokens: Number(row.cached_tokens),
+		cache_prompt_base: Number(row.cache_prompt_base),
+		total_errors: Number(row.total_errors),
+	};
+}
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// splitWindow
+// ---------------------------------------------------------------------------
+
+describe("splitWindow", () => {
+	const now = new Date("2026-10-19T08:15:00.000Z");
+
+	it("serves pure current-day windows from raw alone", async () => {
+		const split = splitWindow("2026-10-19T05:00:00.000Z", null, now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rawFrom).toBe("2026-10-19T05:00:00.000Z");
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("splits spanning windows into complete past days + today raw", async () => {
+		const split = splitWindow("2026-10-15T23:00:00.000Z", null, now);
+		expect(split.rollupFrom).toBe("2026-10-15");
+		expect(split.rollupTo).toBe("2026-10-18");
+		expect(split.rawFrom).toBe("2026-10-19T00:00:00.000Z");
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("drops the raw segment when the window ends before today", async () => {
+		const split = splitWindow(
+			"2026-10-01T00:00:00.000Z",
+			"2026-10-05T12:00:00.000Z",
+			now,
+		);
+		expect(split.rollupFrom).toBe("2026-10-01");
+		expect(split.rollupTo).toBe("2026-10-05");
+		expect(split.rawFrom).toBeNull();
+		expect(split.rawTo).toBe("2026-10-05T12:00:00.000Z");
+	});
+
+	it("treats an absent from as unbounded rollup coverage", async () => {
+		const split = splitWindow(null, null, now);
+		expect(split.rollupFrom).toBe("");
+		expect(split.rollupTo).toBe("2026-10-18");
+		expect(split.rawFrom).toBe("2026-10-19T00:00:00.000Z");
+	});
+
+	it("clamps the rollup upper bound at the to bound (crossing month edges)", async () => {
+		const split = splitWindow(
+			"2026-02-27T10:00:00.000Z",
+			"2026-03-01T12:00:00.000Z",
+			new Date("2026-03-05T00:00:00.000Z"),
+		);
+		expect(split.rollupFrom).toBe("2026-02-27");
+		expect(split.rollupTo).toBe("2026-03-01");
+		expect(split.rawFrom).toBeNull();
+		expect(addUtcDays("2026-02-28", 1)).toBe("2026-03-01");
+		expect(addUtcDays("2025-12-31", 1)).toBe("2026-01-01");
+	});
+
+	it("produces no segment at all for a same-day date-only range (legacy quirk)", async () => {
+		const split = splitWindow("2026-10-19", "2026-10-19", now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rawFrom).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// rollupDate: idempotency, attribution, day boundaries, NULL≠0 denominator
+// ---------------------------------------------------------------------------
+
+describe("rollupDate", () => {
+	it("is idempotent on re-run and preserves attribution and NULL-model groups", async () => {
+		const sqlite = createSqlite();
+		insertToken(sqlite, "t1", "u1");
+		insertToken(sqlite, "t2", null);
+		insertChannel(sqlite, "c1", "Chan");
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 100,
+			prompt_tokens: 60,
+			completion_tokens: 40,
+			cached_input_tokens: 50,
+			cache_creation_tokens: 10,
+			cost: 0.2,
+			latency_ms: 120,
+			created_at: "2026-10-15T10:00:00.000Z",
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 50,
+			prompt_tokens: 200,
+			status: "error",
+			cost: 0.1,
+			latency_ms: 80,
+			created_at: "2026-10-15T11:00:00.000Z",
+		});
+		insertLog(sqlite, {
+			token_id: "t2",
+			model: null,
+			total_tokens: 60,
+			prompt_tokens: 50,
+			completion_tokens: 10,
+			cached_input_tokens: 30,
+			created_at: "2026-10-15T23:59:59.999Z",
+		});
+
+		await rollupDate(makeD1(sqlite), "2026-10-15");
+		await rollupDate(makeD1(sqlite), "2026-10-15");
+
+		const rows = sqlite
+			.prepare(
+				"SELECT * FROM usage_stats_daily WHERE stat_date = '2026-10-15' ORDER BY model",
+			)
+			.all() as Array<Record<string, unknown>>;
+		expect(rows).toHaveLength(2);
+
+		const m1 = rows.find((r) => r.model === "m1")!;
+		const nullModel = rows.find((r) => r.model === null)!;
+		expect(m1).toMatchObject({
+			stat_date: "2026-10-15",
+			model: "m1",
+			channel_id: "c1",
+			token_id: "t1",
+			user_id: "u1",
+			requests: 2,
+			error_count: 1,
+			prompt_tokens: 260,
+			completion_tokens: 40,
+			total_tokens: 150,
+			cached_input_tokens: 50,
+			cache_creation_tokens: 10,
+			// NULL≠0: only the row WITH cache data feeds the denominator.
+			cache_prompt_base: 60,
+			cost: expect.closeTo(0.3, 10),
+			latency_ms_sum: 200,
+			last_seen_at: "2026-10-15T11:00:00.000Z",
+		});
+		// NULL model keeps its own group (NOT NULL was deliberately dropped).
+		expect(nullModel).toMatchObject({
+			model: null,
+			channel_id: null,
+			token_id: "t2",
+			user_id: null,
+			requests: 1,
+			error_count: 0,
+			prompt_tokens: 50,
+			cached_input_tokens: 30,
+			cache_prompt_base: 50,
+		});
+	});
+
+	it("attributes 23:59:59.999 and 00:00:00.000 to the correct UTC days", async () => {
+		const sqlite = createSqlite();
+		insertLog(sqlite, { created_at: "2026-10-15T23:59:59.999Z" });
+		insertLog(sqlite, { created_at: "2026-10-16T00:00:00.000Z" });
+
+		await rollupDate(makeD1(sqlite), "2026-10-15");
+		await rollupDate(makeD1(sqlite), "2026-10-16");
+
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-15'",
+			),
+		).toBe(1);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-16'",
+			),
+		).toBe(1);
+	});
+
+	it("keeps the existing rollup when the raw logs of the date are gone (anti-loss guard)", async () => {
+		const sqlite = createSqlite();
+		// Rollup exists, raw logs already pruned by retention (no usage_logs rows).
+		sqlite
+			.prepare(
+				"INSERT INTO usage_stats_daily (id, stat_date, model, requests) VALUES ('keep_1', '2026-10-15', 'm1', 7)",
+			)
+			.run();
+
+		await rollupDate(makeD1(sqlite), "2026-10-15");
+
+		const rows = sqlite
+			.prepare(
+				"SELECT * FROM usage_stats_daily WHERE stat_date = '2026-10-15'",
+			)
+			.all() as Array<Record<string, unknown>>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ model: "m1", requests: 7 });
+	});
+
+	it("writes nothing (without loss) when the raw set is empty and no rollup exists", async () => {
+		const sqlite = createSqlite();
+		await rollupDate(makeD1(sqlite), "2026-10-15");
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-15'",
+			),
+		).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Two-segment loaders: rollup+raw union must equal the raw-only query
+// ---------------------------------------------------------------------------
+
+describe("rollup + raw union consistency", () => {
+	function seedMixedUsage(sqlite: DatabaseSync, day: string): string {
+		insertToken(sqlite, "t1", "u1");
+		insertChannel(sqlite, "c1", "Chan");
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 100,
+			prompt_tokens: 60,
+			completion_tokens: 40,
+			cached_input_tokens: 50,
+			cache_creation_tokens: 10,
+			cost: 0.2,
+			latency_ms: 120,
+			created_at: `${day}T10:00:00.000Z`,
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 50,
+			prompt_tokens: 200,
+			status: "error",
+			cost: 0.1,
+			latency_ms: 80,
+			created_at: `${day}T11:00:00.000Z`,
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m2",
+			total_tokens: 60,
+			prompt_tokens: 50,
+			completion_tokens: 10,
+			cached_input_tokens: 30,
+			cost: 0.3,
+			latency_ms: 100,
+			created_at: `${day}T23:59:59.999Z`,
+		});
+		return `${day}T00:00:00.000Z`;
+	}
+
+	it("summary union equals the raw-only query (NULL≠0 anchor included)", async () => {
+		const sqlite = createSqlite();
+		const day = addUtcDays(utcDateOf(new Date().toISOString()), -3);
+		const fromIso = seedMixedUsage(sqlite, day);
+		// Today's extra traffic lands in the raw segment.
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 10,
+			prompt_tokens: 10,
+			latency_ms: 40,
+			created_at: new Date().toISOString(),
+		});
+
+		await rollupDate(makeD1(sqlite), day);
+
+		const now = new Date();
+		const split = splitWindow(fromIso, null, now);
+		const summary = await loadDashboardSummary(makeD1(sqlite), split);
+		const legacy = rawSummaryTotals(sqlite, fromIso);
+
+		expect(summary.total_requests).toBe(legacy.total_requests);
+		expect(summary.total_tokens).toBe(legacy.total_tokens);
+		expect(summary.cached_tokens).toBe(legacy.cached_tokens);
+		expect(summary.cache_prompt_base).toBe(legacy.cache_prompt_base);
+		expect(summary.total_errors).toBe(legacy.total_errors);
+		// Rollup-only values too: cached 80 = 50 + 30; base 60 + 50 (NULL row excluded).
+		expect(summary.cached_tokens).toBe(80);
+		expect(summary.cache_prompt_base).toBe(110);
+		// latency avg from merged sums (120+80+100 + today 40 = 340 / 4).
+		expect(summary.latency_sum / summary.total_requests).toBeCloseTo(85, 6);
+	});
+
+	it("daily rows merge both segments without overlap", async () => {
+		const sqlite = createSqlite();
+		const day = addUtcDays(utcDateOf(new Date().toISOString()), -3);
+		seedMixedUsage(sqlite, day);
+		insertLog(sqlite, {
+			model: "m1",
+			total_tokens: 10,
+			created_at: new Date().toISOString(),
+		});
+		await rollupDate(makeD1(sqlite), day);
+
+		const split = splitWindow(`${day}T00:00:00.000Z`, null, new Date());
+		const rows = await loadDashboardDaily(makeD1(sqlite), split);
+		expect(rows.map((r) => r.day)).toEqual([
+			utcDateOf(new Date().toISOString()),
+			day,
+		]);
+		expect(rows[1]).toMatchObject({ requests: 3, tokens: 210 });
+		expect(rows[0]).toMatchObject({ requests: 1, tokens: 10 });
+	});
+
+	it("model usage totals merge rollup and raw per model", async () => {
+		const sqlite = createSqlite();
+		const day = addUtcDays(utcDateOf(new Date().toISOString()), -3);
+		seedMixedUsage(sqlite, day);
+		await rollupDate(makeD1(sqlite), day);
+		const split = splitWindow(`${day}T00:00:00.000Z`, null, new Date());
+		const totals = await loadModelDailyUsageCacheSafe(sqlite, split);
+		expect(totals.get("m1")).toMatchObject({
+			total_requests: 2,
+			total_tokens: 150,
+			total_cost: expect.closeTo(0.3, 10),
+		});
+		expect(totals.get("m2")).toMatchObject({
+			total_requests: 1,
+			total_tokens: 60,
+			total_cost: expect.closeTo(0.3, 10),
+		});
+	});
+
+	// helper kept local: merges loadModelUsageTotals rows into a map
+	async function loadModelDailyUsageCacheSafe(
+		sqlite: DatabaseSync,
+		split: ReturnType<typeof splitWindow>,
+	) {
+		const rows = await loadModelUsageTotals(makeD1(sqlite), split);
+		return new Map(rows.map((r) => [r.model, r]));
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Prunes
+// ---------------------------------------------------------------------------
+
+describe("pruneUsageLogsBatched", () => {
+	function seedLogs(sqlite: DatabaseSync, oldCount: number, newCount: number) {
+		const cutoffIso = new Date(Date.now() - 40 * 86_400_000).toISOString();
+		for (let i = 0; i < oldCount; i++) {
+			insertLog(sqlite, { created_at: cutoffIso });
+		}
+		for (let i = 0; i < newCount; i++) {
+			insertLog(sqlite, { created_at: new Date().toISOString() });
+		}
+	}
+
+	it("deletes only old rows across chunked batches and is re-entrant", async () => {
+		const sqlite = createSqlite();
+		seedLogs(sqlite, 7, 3);
+		const db = makeD1(sqlite);
+
+		const deleted = await pruneUsageLogsBatched(
+			db,
+			new Date(Date.now() - 30 * 86_400_000).toISOString(),
+			3,
+		);
+		expect(deleted).toBe(7);
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(3);
+
+		// Re-running is a no-op (termination + idempotency).
+		expect(
+			await pruneUsageLogsBatched(
+				db,
+				new Date(Date.now() - 30 * 86_400_000).toISOString(),
+				3,
+			),
+		).toBe(0);
+	});
+
+	it("deletes everything in one batch when the chunk exceeds the table", async () => {
+		const sqlite = createSqlite();
+		seedLogs(sqlite, 5, 0);
+		const deleted = await pruneUsageLogsBatched(
+			makeD1(sqlite),
+			new Date(Date.now() - 30 * 86_400_000).toISOString(),
+			500,
+		);
+		expect(deleted).toBe(5);
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(0);
+	});
+});
+
+describe("pruneExpiredSessions", () => {
+	it("deletes expired sessions and keeps active ones", async () => {
+		const sqlite = createSqlite();
+		const nowIso = new Date().toISOString();
+		const expired = "2026-01-01T00:00:00.000Z";
+		for (const [table, expires] of [
+			["admin_sessions", expired],
+			["admin_sessions", nowIso],
+			["user_sessions", expired],
+			["user_sessions", nowIso],
+		] as const) {
+			sqlite
+				.prepare(
+					`INSERT INTO ${table} (id, ${table === "admin_sessions" ? "token_hash" : "user_id, token_hash"}, expires_at, created_at) VALUES (?, ${table === "admin_sessions" ? "?" : "?, ?"}, ?, '2026-01-01T00:00:00.000Z')`,
+				)
+				.run(
+					`s_${++seq}`,
+					...(table === "user_sessions" ? ["u1"] : []),
+					"hash",
+					expires,
+				);
+		}
+
+		const result = await pruneExpiredSessions(makeD1(sqlite), nowIso);
+		expect(result).toEqual({ adminDeleted: 1, userDeleted: 1 });
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM admin_sessions"),
+		).toBe(1);
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM user_sessions"),
+		).toBe(1);
+	});
+});
+
+describe("pruneRollup", () => {
+	it("deletes rollup rows older than the cutoff date", async () => {
+		const sqlite = createSqlite();
+		const today = utcDateOf(new Date().toISOString());
+		insertRollupRow(sqlite, addUtcDays(today, -200));
+		insertRollupRow(sqlite, addUtcDays(today, -1));
+		const pruned = await pruneRollup(makeD1(sqlite), addUtcDays(today, -180));
+		expect(pruned).toBe(1);
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_stats_daily"),
+		).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runDailyMaintenance (cron chain)
+// ---------------------------------------------------------------------------
+
+describe("runDailyMaintenance", () => {
+	it("rolls up yesterday, prunes expired logs/sessions/rollups", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const now = new Date();
+		const today = utcDateOf(now.toISOString());
+		const yesterday = addUtcDays(today, -1);
+
+		insertLog(sqlite, {
+			total_tokens: 5,
+			created_at: `${yesterday}T12:00:00.000Z`,
+		});
+		insertLog(sqlite, {
+			total_tokens: 5,
+			created_at: new Date(now.getTime() - 40 * 86_400_000).toISOString(),
+		});
+		insertRollupRow(sqlite, addUtcDays(today, -200));
+		sqlite
+			.prepare(
+				"INSERT INTO admin_sessions (id, token_hash, expires_at, created_at) VALUES ('s_old', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+			)
+			.run();
+
+		await runDailyMaintenance(db, now);
+
+		// Yesterday rolled up, old raw log pruned, old session + old rollup gone.
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${yesterday}'`,
+			),
+		).toBe(1);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_logs",
+			),
+		).toBe(1);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM admin_sessions",
+			),
+		).toBe(0);
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -200)}'`,
+			),
+		).toBe(0);
+	});
+
+	it("keeps running the remaining steps when one step fails", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		const executed: string[] = [];
+		const failing = {
+			prepare(sql: string) {
+				if (sql.includes("usage_stats_daily")) {
+					throw new Error("rollup boom");
+				}
+				executed.push(sql);
+				return real.prepare(sql);
+			},
+			batch(statements: Array<{ run(): Promise<unknown> }>) {
+				return real.batch(statements);
+			},
+		} as unknown as D1Database;
+
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runDailyMaintenance(failing);
+
+		// Steps 2–3 still executed after the rollup failure.
+		expect(
+			executed.some((sql) => sql.includes("DELETE FROM usage_logs")),
+		).toBe(true);
+		expect(
+			executed.some((sql) => sql.includes("DELETE FROM admin_sessions")),
+		).toBe(true);
+		expect(
+			executed.some((sql) => sql.includes("DELETE FROM user_sessions")),
+		).toBe(true);
+		const errorLabels = errSpy.mock.calls.map((c) => c[0]);
+		expect(errorLabels).toContain("[rollup] daily rollup failed");
+		expect(errorLabels).toContain("[retention] rollup prune failed");
+		expect(logSpy).toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Endpoint unions (Hono apps against the sqlite adapter)
+// ---------------------------------------------------------------------------
+
+describe("dashboard endpoint (rollup + raw union)", () => {
+	it("returns the same numbers as the raw-only query after rollup", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(new Date().toISOString());
+		const day = addUtcDays(today, -3);
+		insertToken(sqlite, "t1", "u1");
+		insertChannel(sqlite, "c1", "Chan");
+		for (const [model, tokens, latency] of [
+			["m1", 100, 120],
+			["m1", 50, 80],
+			["m2", 60, 100],
+		] as const) {
+			insertLog(sqlite, {
+				token_id: "t1",
+				channel_id: "c1",
+				model,
+				total_tokens: tokens,
+				prompt_tokens: tokens,
+				cached_input_tokens: model === "m1" ? 20 : null,
+				latency_ms: latency,
+				created_at: `${day}T10:00:00.000Z`,
+			});
+		}
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 10,
+			prompt_tokens: 10,
+			latency_ms: 40,
+			created_at: new Date().toISOString(),
+		});
+
+		await rollupDate(db, day);
+
+		const res = await dashboardRoutes.request(
+			`/?from=${day}T00%3A00%3A00.000Z`,
+			undefined,
+			{ DB: db },
+		);
+		expect(res.status).toBe(200);
+		const payload = (await res.json()) as {
+			summary: Record<string, number | null>;
+			byDay: Array<Record<string, unknown>>;
+			byModel: Array<{ model: string; requests: number }>;
+		};
+
+		const legacy = rawSummaryTotals(sqlite, `${day}T00:00:00.000Z`);
+		expect(payload.summary.total_requests).toBe(legacy.total_requests);
+		expect(payload.summary.total_tokens).toBe(legacy.total_tokens);
+		expect(payload.summary.total_errors).toBe(legacy.total_errors);
+		expect(payload.summary.cached_tokens).toBe(legacy.cached_tokens);
+		expect(payload.summary.cache_rate).toBeCloseTo(
+			legacy.cached_tokens / legacy.cache_prompt_base,
+			10,
+		);
+		expect(payload.summary.avg_latency).toBeCloseTo(340 / 4, 10);
+
+		expect(payload.byDay).toHaveLength(2);
+		expect(payload.byDay[0].day).toBe(today);
+		expect(payload.byDay[1].day).toBe(day);
+		expect(payload.byDay[1].requests).toBe(3);
+		const m1 = payload.byModel.find((r) => r.model === "m1");
+		expect(m1?.requests).toBe(3);
+	});
+
+	it("POST /rollup rolls one date, validates input, and backfills when empty", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(new Date().toISOString());
+		const day = addUtcDays(today, -2);
+		insertLog(sqlite, { created_at: `${day}T10:00:00.000Z` });
+
+		const bad = await dashboardRoutes.request(
+			"/rollup",
+			{ method: "POST", body: JSON.stringify({ date: "10-15" }) },
+			{ DB: db },
+		);
+		expect(bad.status).toBe(400);
+
+		const single = await dashboardRoutes.request(
+			"/rollup",
+			{ method: "POST", body: JSON.stringify({ date: day }) },
+			{ DB: db },
+		);
+		expect(await single.json()).toEqual({ rolled: [day] });
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${day}'`,
+			),
+		).toBe(1);
+
+		// Backfill covers dates missing a rollup (here: only `today` remains).
+		insertLog(sqlite, { created_at: new Date().toISOString() });
+		const backfill = await dashboardRoutes.request(
+			"/rollup",
+			{ method: "POST", body: JSON.stringify({}) },
+			{ DB: db },
+		);
+		expect(await backfill.json()).toEqual({ rolled: [today] });
+	});
+});
+
+describe("models endpoint (30d/7d rollup unions)", () => {
+	it("merges rollup and raw for usage totals, daily series, and channel latency", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(new Date().toISOString());
+		const day = addUtcDays(today, -5);
+		insertChannel(sqlite, "c1", "Chan");
+		insertLog(sqlite, {
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 100,
+			prompt_tokens: 100,
+			cost: 0.5,
+			latency_ms: 200,
+			created_at: `${day}T10:00:00.000Z`,
+		});
+		insertLog(sqlite, {
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 30,
+			prompt_tokens: 30,
+			cost: 0.1,
+			latency_ms: 60,
+			created_at: new Date().toISOString(),
+		});
+
+		await rollupDate(db, day);
+
+		const res = await modelsRoutes.request("/", undefined, { DB: db });
+		expect(res.status).toBe(200);
+		const payload = (await res.json()) as {
+			models: Array<{
+				id: string;
+				total_requests: number;
+				total_tokens: number;
+				total_cost: number;
+				avg_latency_ms: number | null;
+				channels: Array<{ id: string; avg_latency_ms: number | null }>;
+				daily: Array<{ day: string; requests: number }>;
+			}>;
+		};
+		const m1 = payload.models.find((m) => m.id === "m1")!;
+		expect(m1.total_requests).toBe(2);
+		expect(m1.total_tokens).toBe(130);
+		expect(m1.total_cost).toBeCloseTo(0.6, 10);
+		expect(m1.avg_latency_ms).toBe(130);
+		expect(m1.channels[0]).toMatchObject({ id: "c1", avg_latency_ms: 130 });
+		expect(m1.daily.map((d) => d.day)).toEqual([day, today]);
+	});
+});
+
+describe("monitoring endpoint (channel health over rollup + raw)", () => {
+	it("merges channel totals, daily trends, and global summary", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const now = new Date();
+		const today = utcDateOf(now.toISOString());
+		const d2 = addUtcDays(today, -2);
+		const d1 = addUtcDays(today, -1);
+		insertChannel(sqlite, "c1", "Chan");
+		insertChannel(sqlite, "c2", "Idle");
+		for (const day of [d2, d1]) {
+			insertLog(sqlite, {
+				channel_id: "c1",
+				model: "m1",
+				total_tokens: 10,
+				latency_ms: 100,
+				created_at: `${day}T10:00:00.000Z`,
+			});
+			insertLog(sqlite, {
+				channel_id: "c1",
+				model: "m1",
+				status: "error",
+				latency_ms: 50,
+				created_at: `${day}T11:00:00.000Z`,
+			});
+		}
+		insertLog(sqlite, {
+			channel_id: "c1",
+			model: "m1",
+			latency_ms: 40,
+			created_at: new Date(now.getTime() - 60_000).toISOString(),
+		});
+
+		await rollupDate(db, d2);
+		await rollupDate(db, d1);
+
+		const res = await monitoringRoutes.request("/?range=30d", undefined, {
+			DB: db,
+		});
+		expect(res.status).toBe(200);
+		const payload = (await res.json()) as {
+			summary: Record<string, number>;
+			channels: Array<Record<string, unknown>>;
+			dailyTrends: Array<{ channel_id: string; day: string; requests: number }>;
+		};
+		expect(payload.summary.total_requests).toBe(5);
+		expect(payload.summary.total_errors).toBe(2);
+		expect(payload.summary.active_channels).toBe(1);
+		const c1 = payload.channels.find((ch) => ch.channel_id === "c1")!;
+		expect(c1.total_requests).toBe(5);
+		expect(c1.success_count).toBe(3);
+		expect(c1.avg_latency_ms).toBe(68); // (100+50+100+50+40)/5
+		expect(String(c1.last_seen)).toContain(today);
+		const c2 = payload.channels.find((ch) => ch.channel_id === "c2")!;
+		expect(c2.total_requests).toBe(0);
+		// Day slots served from the rollup: one bucket per past day + today.
+		expect(payload.dailyTrends.filter((t) => t.day === d2)).toHaveLength(1);
+		expect(payload.dailyTrends.filter((t) => t.day === d1)).toHaveLength(1);
+		expect(
+			payload.dailyTrends.reduce((sum, t) => sum + t.requests, 0),
+		).toBe(5);
+	});
+});
+
+describe("user loaders (redundant user_id attribution)", () => {
+	it("totals and daily series come from rollup without the tokens JOIN", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(new Date().toISOString());
+		const day = addUtcDays(today, -3);
+		insertToken(sqlite, "t1", "u1");
+		insertLog(sqlite, {
+			token_id: "t1",
+			model: "m1",
+			total_tokens: 100,
+			prompt_tokens: 100,
+			cost: 0.5,
+			cached_input_tokens: 25,
+			created_at: `${day}T10:00:00.000Z`,
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			model: "m1",
+			total_tokens: 20,
+			prompt_tokens: 20,
+			cost: 0.1,
+			created_at: new Date().toISOString(),
+		});
+
+		await rollupDate(db, day);
+		const split = splitWindow(null, null, new Date());
+		const totals = await loadUserUsageTotals(db, "u1", split);
+		expect(totals.total_requests).toBe(2);
+		expect(totals.total_tokens).toBe(120);
+		expect(totals.total_cost).toBeCloseTo(0.6, 10);
+		expect(totals.cached_tokens).toBe(25);
+		expect(totals.cache_prompt_base).toBe(100);
+
+		const daily = await loadUserDailyUsage(db, "u1", split);
+		expect(daily.map((d) => d.day)).toEqual([today, day]);
+		expect(daily[1]).toMatchObject({ requests: 1, cost: 0.5 });
+	});
+
+	it("keeps rollup-attributed usage visible after the token is deleted", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(new Date().toISOString());
+		const day = addUtcDays(today, -3);
+		insertToken(sqlite, "t1", "u1");
+		insertLog(sqlite, {
+			token_id: "t1",
+			total_tokens: 100,
+			created_at: `${day}T10:00:00.000Z`,
+		});
+
+		await rollupDate(db, day);
+		sqlite.prepare("DELETE FROM tokens WHERE id = 't1'").run();
+
+		const split = splitWindow(null, null, new Date());
+		const totals = await loadUserUsageTotals(db, "u1", split);
+		// Raw JOIN-to-tokens would now return 0; the rollup keeps the history.
+		expect(totals.total_requests).toBe(1);
+		expect(totals.total_tokens).toBe(100);
+	});
+});

@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引：routes 薄壳 + services 下沉"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "0026 迁移与 schema.sql 同步、幂等分层"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "聚合口径契约（§3.4 NULL≠0 分母、§4 错误矩阵）——rollup 聚合列必须同口径"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "usage_retention_days 读取走三级回退链惯例"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "scheduled 内失败日志形态（[tag] 前缀 + 平面载荷）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁与禁则"}

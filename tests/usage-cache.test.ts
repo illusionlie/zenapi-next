@@ -378,12 +378,14 @@ describe("dashboard route - cache_rate aggregation shape", () => {
 						return stmt;
 					},
 					all: async () => {
-						if (sql.includes("GROUP BY day")) {
+						// Rollup-segment daily query (the raw segment returns nothing).
+						if (sql.includes("usage_stats_daily") && sql.includes("GROUP BY stat_date")) {
 							return { results: byDayRows };
 						}
 						return { results: [] };
 					},
-					first: async () => summaryRow,
+					first: async () =>
+						sql.includes("usage_stats_daily") ? summaryRow : null,
 					run: async () => ({}),
 				};
 				return stmt;

@@ -7,6 +7,9 @@ CORS_ORIGIN = "http://localhost:5173"
 PROXY_RETRY_ROUNDS = "2"
 PROXY_RETRY_DELAY_MS = "200"
 
+[triggers]
+crons = ["17 3 * * *"] # 每日 03:17 UTC：rollup 昨日 → 分批清理过期原始日志/会话/rollup
+
 [[d1_databases]]
 binding = "DB"
 database_name = "api-worker"

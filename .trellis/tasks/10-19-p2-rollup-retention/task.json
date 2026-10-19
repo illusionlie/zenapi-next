@@ -3,7 +3,7 @@
 	"name": "p2-rollup-retention",
 	"title": "P2：用量预聚合与保留策略 cron 化",
 	"description": "usage_stats_daily rollup 表 + Workers Cron scheduled handler + 分批 DELETE retention + 会话过期清理",
-	"status": "planning",
+	"status": "in_progress",
 	"dev_type": null,
 	"scope": null,
 	"package": null,

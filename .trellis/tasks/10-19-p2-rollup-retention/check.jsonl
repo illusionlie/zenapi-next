@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "检查基线：门禁命令与禁则"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "校验 0026 迁移与 schema.sql 同步、索引幂等"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "校验聚合端点切换后 cache_rate/prompt 口径零回归（NULL≠0 分母锚点）"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "校验新管理端点 jsonError / snake_case 错误码惯例"}

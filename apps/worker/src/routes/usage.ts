@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { getRetentionDays } from "../services/settings";
 import { pruneUsageLogs } from "../services/usage";
+import { pruneUsageLogsBatched } from "../services/usage-stats";
 
 const usage = new Hono<AppEnv>();
 
@@ -46,6 +47,19 @@ usage.get("/", async (c) => {
 		.bind(...params)
 		.all();
 	return c.json({ logs: result.results ?? [] });
+});
+
+/**
+ * Manual retention prune (admin): deletes raw usage logs older than the
+ * configured retention in bounded batches (same path as the daily cron, minus
+ * rollup / session cleanup). Useful for testing and one-off big cleanups.
+ */
+usage.post("/prune", async (c) => {
+	const retention = await getRetentionDays(c.env.DB);
+	const cutoff = new Date();
+	cutoff.setDate(cutoff.getDate() - retention);
+	const deleted = await pruneUsageLogsBatched(c.env.DB, cutoff.toISOString());
+	return c.json({ deleted });
 });
 
 export default usage;

@@ -7,6 +7,12 @@ import {
 } from "../services/channel-models";
 import { listActiveChannels } from "../services/channel-repo";
 import { loadAllChannelAliasesGrouped } from "../services/model-aliases";
+import {
+	loadModelChannelLatency,
+	loadModelDailyUsage,
+	loadModelUsageTotals,
+	splitWindow,
+} from "../services/usage-stats";
 import { jsonError } from "../utils/http";
 
 const models = new Hono<AppEnv>();
@@ -166,24 +172,22 @@ models.get("/", async (c) => {
 		pricingMap,
 	);
 
-	// Aggregate usage stats from last 30 days
-	const usageAgg = await c.env.DB.prepare(
-		`SELECT model,
-			COUNT(*) as total_requests,
-			SUM(total_tokens) as total_tokens,
-			SUM(cost) as total_cost,
-			AVG(latency_ms) as avg_latency_ms
-		FROM usage_logs
-		WHERE created_at > datetime('now', '-30 days') AND model IS NOT NULL
-		GROUP BY model`,
-	).all<{
-		model: string;
-		total_requests: number;
-		total_tokens: number;
-		total_cost: number;
-		avg_latency_ms: number;
-	}>();
+	// Aggregate usage stats: complete past days from usage_stats_daily (30d
+	// rollup + 7d rollup for the daily series), today's raw rows merged on top.
+	const now = new Date();
+	const DAY_MS = 86_400_000;
+	const usageSplit = splitWindow(
+		new Date(now.getTime() - 30 * DAY_MS).toISOString(),
+		null,
+		now,
+	);
+	const dailySplit = splitWindow(
+		new Date(now.getTime() - 7 * DAY_MS).toISOString(),
+		null,
+		now,
+	);
 
+	const usageRows = await loadModelUsageTotals(c.env.DB, usageSplit);
 	const usageMap = new Map<
 		string,
 		{
@@ -193,34 +197,20 @@ models.get("/", async (c) => {
 			avg_latency_ms: number | null;
 		}
 	>();
-	for (const row of usageAgg.results ?? []) {
+	for (const row of usageRows) {
+		const avg =
+			row.total_requests > 0 ? row.latency_sum / row.total_requests : 0;
 		usageMap.set(row.model, {
 			total_requests: row.total_requests,
 			total_tokens: row.total_tokens,
 			total_cost: row.total_cost,
-			avg_latency_ms: row.avg_latency_ms,
+			avg_latency_ms: avg > 0 ? avg : null,
 		});
 	}
 
-	// Daily usage for last 7 days
-	const dailyAgg = await c.env.DB.prepare(
-		`SELECT model,
-			DATE(created_at) as day,
-			COUNT(*) as requests,
-			SUM(total_tokens) as tokens
-		FROM usage_logs
-		WHERE created_at > datetime('now', '-7 days') AND model IS NOT NULL
-		GROUP BY model, DATE(created_at)
-		ORDER BY day`,
-	).all<{
-		model: string;
-		day: string;
-		requests: number;
-		tokens: number;
-	}>();
-
+	const dailyRows = await loadModelDailyUsage(c.env.DB, dailySplit);
 	const dailyMap = new Map<string, DailyUsage[]>();
-	for (const row of dailyAgg.results ?? []) {
+	for (const row of dailyRows) {
 		const existing = dailyMap.get(row.model) ?? [];
 		existing.push({
 			day: row.day,
@@ -230,21 +220,13 @@ models.get("/", async (c) => {
 		dailyMap.set(row.model, existing);
 	}
 
-	// Per-channel avg latency
-	const channelLatency = await c.env.DB.prepare(
-		`SELECT model, channel_id, AVG(latency_ms) as avg_latency_ms
-		FROM usage_logs
-		WHERE created_at > datetime('now', '-30 days') AND model IS NOT NULL AND channel_id IS NOT NULL
-		GROUP BY model, channel_id`,
-	).all<{
-		model: string;
-		channel_id: string;
-		avg_latency_ms: number;
-	}>();
-
+	const latencyRows = await loadModelChannelLatency(c.env.DB, usageSplit);
 	const channelLatencyMap = new Map<string, number>();
-	for (const row of channelLatency.results ?? []) {
-		channelLatencyMap.set(`${row.model}:${row.channel_id}`, row.avg_latency_ms);
+	for (const row of latencyRows) {
+		channelLatencyMap.set(
+			`${row.model}:${row.channel_id}`,
+			row.requests > 0 ? row.latency_sum / row.requests : 0,
+		);
 	}
 
 	// Build result from effective mapping

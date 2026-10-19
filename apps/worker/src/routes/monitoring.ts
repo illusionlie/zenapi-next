@@ -1,5 +1,11 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import {
+	loadChannelDailyTrends,
+	loadChannelHealthRows,
+	loadWindowTotals,
+	splitWindow,
+} from "../services/usage-stats";
 import { resolveMonitoringRange } from "../utils/monitoring";
 
 const monitoring = new Hono<AppEnv>();
@@ -7,59 +13,27 @@ const monitoring = new Hono<AppEnv>();
 monitoring.get("/", async (c) => {
 	const range = c.req.query("range") ?? "7d";
 	const config = resolveMonitoringRange(range);
-	const since = new Date(Date.now() - config.ms).toISOString().slice(0, 19);
-	const slotExpr = `substr(created_at, 1, ${config.sqlSlice})`;
+	const now = new Date();
+	const since = new Date(now.getTime() - config.ms).toISOString().slice(0, 19);
+	// Two-segment assembly: complete past days come from usage_stats_daily
+	// (day-granularity rollup), today's rows come from usage_logs. Hourly /
+	// minute trend slots cannot be served from a day-granularity rollup, so
+	// those queries only touch the rollup when the slot size is a full day.
+	const split = splitWindow(since, null, now);
 
-	const channelRows = await c.env.DB.prepare(
-		`SELECT
-			c.id AS channel_id,
-			c.name AS channel_name,
-			c.status AS channel_status,
-			c.api_format,
-			c.api_formats,
-			COUNT(u.id) AS total_requests,
-			COALESCE(SUM(CASE WHEN u.status = 'ok' THEN 1 ELSE 0 END), 0) AS success_count,
-			COALESCE(SUM(CASE WHEN u.status != 'ok' THEN 1 ELSE 0 END), 0) AS error_count,
-			COALESCE(AVG(u.latency_ms), 0) AS avg_latency_ms,
-			MAX(u.created_at) AS last_seen
-		FROM channels c
-		LEFT JOIN usage_logs u ON u.channel_id = c.id AND u.created_at >= ?
-		GROUP BY c.id, c.name, c.status, c.api_format, c.api_formats
-		ORDER BY total_requests DESC`,
-	)
-		.bind(since)
-		.all();
+	const channelRows = await loadChannelHealthRows(c.env.DB, split);
 
-	const dailyRows = await c.env.DB.prepare(
-		`SELECT
-			channel_id,
-			${slotExpr} AS day,
-			COUNT(*) AS requests,
-			SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors,
-			COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
-		FROM usage_logs
-		WHERE created_at >= ?
-		GROUP BY channel_id, day
-		ORDER BY day DESC, requests DESC`,
-	)
-		.bind(since)
-		.all();
+	const dailyRows = await loadChannelDailyTrends(
+		c.env.DB,
+		since,
+		split,
+		config.sqlSlice,
+	);
 
-	const globalRow = await c.env.DB.prepare(
-		`SELECT
-			COUNT(*) AS total_requests,
-			COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) AS total_success,
-			COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS total_errors,
-			COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
-		FROM usage_logs
-		WHERE created_at >= ?`,
-	)
-		.bind(since)
-		.first();
+	const globalRow = await loadWindowTotals(c.env.DB, split);
 
 	// Always query last 15 minutes for system status
-	const recentSince = new Date(Date.now() - 15 * 60_000)
+	const recentSince = new Date(now.getTime() - 15 * 60_000)
 		.toISOString()
 		.slice(0, 19);
 	const recentRow = await c.env.DB.prepare(
@@ -102,36 +76,39 @@ monitoring.get("/", async (c) => {
 		});
 	}
 
-	const totalRequests = Number(globalRow?.total_requests ?? 0);
-	const totalSuccess = Number(globalRow?.total_success ?? 0);
-	const totalErrors = Number(globalRow?.total_errors ?? 0);
+	const totalRequests = Number(globalRow.total_requests);
+	const totalSuccess = totalRequests - Number(globalRow.total_errors);
+	const totalErrors = Number(globalRow.total_errors);
 
-	const channels = (channelRows.results ?? []).map((row) => {
-		const total = Number(row.total_requests);
-		const success = Number(row.success_count);
-		const chId = String(row.channel_id);
-		const recent = recentByChannel.get(chId);
-		return {
-			channel_id: row.channel_id,
-			channel_name: row.channel_name,
-			channel_status: row.channel_status,
-			api_format: row.api_format,
-			api_formats: row.api_formats ?? null,
-			total_requests: total,
-			success_count: success,
-			error_count: Number(row.error_count),
-			success_rate:
-				total > 0 ? Math.round((success / total) * 10000) / 100 : null,
-			avg_latency_ms: Math.round(Number(row.avg_latency_ms)),
-			last_seen: row.last_seen ?? null,
-			recent_success_rate: recent?.success_rate ?? null,
-			recent_avg_latency_ms: recent?.avg_latency_ms ?? null,
-		};
-	});
+	const channels = (channelRows ?? [])
+		.slice()
+		.sort((a, b) => b.total_requests - a.total_requests)
+		.map((row) => {
+			const total = row.total_requests;
+			const success = row.total_requests - row.error_count;
+			const chId = String(row.channel_id);
+			const recent = recentByChannel.get(chId);
+			return {
+				channel_id: row.channel_id,
+				channel_name: row.channel_name,
+				channel_status: row.channel_status,
+				api_format: row.api_format,
+				api_formats: row.api_formats ?? null,
+				total_requests: total,
+				success_count: success,
+				error_count: row.error_count,
+				success_rate:
+					total > 0 ? Math.round((success / total) * 10000) / 100 : null,
+				avg_latency_ms: total > 0 ? Math.round(row.latency_sum / total) : 0,
+				last_seen: row.last_seen ?? null,
+				recent_success_rate: recent?.success_rate ?? null,
+				recent_avg_latency_ms: recent?.avg_latency_ms ?? null,
+			};
+		});
 
-	const dailyTrends = (dailyRows.results ?? []).map((row) => {
+	const dailyTrends = dailyRows.map((row) => {
 		const reqs = Number(row.requests);
-		const succ = Number(row.success);
+		const succ = reqs - Number(row.errors);
 		return {
 			channel_id: row.channel_id,
 			day: row.day,
@@ -139,7 +116,7 @@ monitoring.get("/", async (c) => {
 			success: succ,
 			errors: Number(row.errors),
 			success_rate: reqs > 0 ? Math.round((succ / reqs) * 10000) / 100 : 0,
-			avg_latency_ms: Math.round(Number(row.avg_latency_ms)),
+			avg_latency_ms: reqs > 0 ? Math.round(Number(row.latency_sum) / reqs) : 0,
 		};
 	});
 
@@ -154,7 +131,10 @@ monitoring.get("/", async (c) => {
 			total_requests: totalRequests,
 			total_success: totalSuccess,
 			total_errors: totalErrors,
-			avg_latency_ms: Math.round(Number(globalRow?.avg_latency_ms ?? 0)),
+			avg_latency_ms:
+				totalRequests > 0
+					? Math.round(Number(globalRow.latency_sum) / totalRequests)
+					: 0,
 			success_rate:
 				totalRequests > 0
 					? Math.round((totalSuccess / totalRequests) * 10000) / 100

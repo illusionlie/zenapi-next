@@ -1,12 +1,26 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import {
+	type DashboardSummaryAgg,
+	loadDashboardByChannel,
+	loadDashboardByModel,
+	loadDashboardByToken,
+	loadDashboardDaily,
+	loadDashboardSummary,
+	rollupBackfill,
+	rollupDate,
+	splitWindow,
+} from "../services/usage-stats";
+import { jsonError } from "../utils/http";
 
 const dashboard = new Hono<AppEnv>();
 
 /**
  * Cache hit rate: SUM(cached_input_tokens) / SUM(prompt_tokens where
  * cached_input_tokens IS NOT NULL). Rows without cache data are excluded
- * from the denominator (NULL ≠ 0); no data → null.
+ * from the denominator (NULL ≠ 0); no data → null. The rollup segment keeps
+ * the same denominator in cache_prompt_base (migration 0026), so the merged
+ * result holds the §3.4 contract on both segments.
  */
 function computeCacheRate(
 	cachedTokens: number,
@@ -15,105 +29,89 @@ function computeCacheRate(
 	return cachePromptBase > 0 ? cachedTokens / cachePromptBase : null;
 }
 
-function buildDateFilters(query: Record<string, string>) {
-	let sql = " WHERE 1=1";
-	const params: Array<string> = [];
-	if (query.from) {
-		sql += " AND created_at >= ?";
-		params.push(query.from);
-	}
-	if (query.to) {
-		sql += " AND created_at <= ?";
-		params.push(query.to);
-	}
-	return { sql, params };
+/** Avg latency from merged sums; rows are the denominator (raw latency_ms is never null). */
+function avgLatency(row: DashboardSummaryAgg): number {
+	return row.total_requests > 0 ? row.latency_sum / row.total_requests : 0;
 }
 
 /**
- * Returns aggregated usage metrics.
+ * Returns aggregated usage metrics. Windows starting before today's UTC
+ * midnight read complete past days from usage_stats_daily (rollup) and merge
+ * today's raw rows on top (splitWindow two-segment assembly).
  */
 dashboard.get("/", async (c) => {
 	const query = c.req.query();
-	const { sql, params } = buildDateFilters(query);
+	const split = splitWindow(query.from ?? null, query.to ?? null);
 
-	const summary = await c.env.DB.prepare(
-		`SELECT COUNT(*) as total_requests, COALESCE(SUM(total_tokens), 0) as total_tokens, COALESCE(AVG(latency_ms), 0) as avg_latency, COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) as total_errors, COALESCE(SUM(cached_input_tokens), 0) as cached_tokens, COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens, COALESCE(SUM(CASE WHEN cached_input_tokens IS NOT NULL THEN prompt_tokens ELSE 0 END), 0) as cache_prompt_base FROM usage_logs${sql}`,
-	)
-		.bind(...params)
-		.first<{
-			total_requests: number;
-			total_tokens: number;
-			avg_latency: number;
-			total_errors: number;
-			cached_tokens: number;
-			cache_creation_tokens: number;
-			cache_prompt_base: number;
-		}>();
-
-	const byDay = await c.env.DB.prepare(
-		`SELECT substr(created_at, 1, 10) as day, COUNT(*) as requests, COALESCE(SUM(total_tokens), 0) as tokens, COALESCE(SUM(cached_input_tokens), 0) as cached_tokens, COALESCE(SUM(CASE WHEN cached_input_tokens IS NOT NULL THEN prompt_tokens ELSE 0 END), 0) as cache_prompt_base FROM usage_logs${sql} GROUP BY day ORDER BY day DESC LIMIT 30`,
-	)
-		.bind(...params)
-		.all<{
-			day: string;
-			requests: number;
-			tokens: number;
-			cached_tokens: number;
-			cache_prompt_base: number;
-		}>();
-
-	const byModel = await c.env.DB.prepare(
-		`SELECT model, COUNT(*) as requests, COALESCE(SUM(total_tokens), 0) as tokens FROM usage_logs${sql} GROUP BY model ORDER BY requests DESC LIMIT 20`,
-	)
-		.bind(...params)
-		.all();
-
-	const byChannel = await c.env.DB.prepare(
-		`SELECT channels.id as channel_id, channels.name as channel_name, COUNT(usage_logs.id) as requests, COALESCE(SUM(usage_logs.total_tokens), 0) as tokens FROM usage_logs LEFT JOIN channels ON channels.id = usage_logs.channel_id${sql} GROUP BY channels.id, channels.name ORDER BY requests DESC LIMIT 20`,
-	)
-		.bind(...params)
-		.all();
-
-	const byToken = await c.env.DB.prepare(
-		`SELECT tokens.id as token_id, tokens.name as token_name, COUNT(usage_logs.id) as requests, COALESCE(SUM(usage_logs.total_tokens), 0) as tokens FROM usage_logs LEFT JOIN tokens ON tokens.id = usage_logs.token_id${sql} GROUP BY tokens.id, tokens.name ORDER BY requests DESC LIMIT 20`,
-	)
-		.bind(...params)
-		.all();
-
-	const summaryRow = summary ?? {
-		total_requests: 0,
-		total_tokens: 0,
-		avg_latency: 0,
-		total_errors: 0,
-		cached_tokens: 0,
-		cache_creation_tokens: 0,
-		cache_prompt_base: 0,
-	};
+	const summary = await loadDashboardSummary(c.env.DB, split);
+	const byDay = await loadDashboardDaily(c.env.DB, split);
+	const byModel = await loadDashboardByModel(c.env.DB, split);
+	const byChannel = await loadDashboardByChannel(c.env.DB, split);
+	const byToken = await loadDashboardByToken(c.env.DB, split);
 
 	return c.json({
 		summary: {
-			total_requests: summaryRow.total_requests,
-			total_tokens: summaryRow.total_tokens,
-			avg_latency: summaryRow.avg_latency,
-			total_errors: summaryRow.total_errors,
-			cached_tokens: summaryRow.cached_tokens,
-			cache_creation_tokens: summaryRow.cache_creation_tokens,
+			total_requests: summary.total_requests,
+			total_tokens: summary.total_tokens,
+			avg_latency: avgLatency(summary),
+			total_errors: summary.total_errors,
+			cached_tokens: summary.cached_tokens,
+			cache_creation_tokens: summary.cache_creation_tokens,
 			cache_rate: computeCacheRate(
-				summaryRow.cached_tokens,
-				summaryRow.cache_prompt_base,
+				summary.cached_tokens,
+				summary.cache_prompt_base,
 			),
 		},
-		byDay: (byDay.results ?? []).map((row) => ({
+		byDay: byDay.map((row) => ({
 			day: row.day,
 			requests: row.requests,
 			tokens: row.tokens,
 			cached_tokens: row.cached_tokens,
 			cache_rate: computeCacheRate(row.cached_tokens, row.cache_prompt_base),
 		})),
-		byModel: byModel.results ?? [],
-		byChannel: byChannel.results ?? [],
-		byToken: byToken.results ?? [],
+		byModel: byModel.map((row) => ({
+			model: row.model,
+			requests: row.requests,
+			tokens: row.tokens,
+		})),
+		byChannel: byChannel.map((row) => ({
+			channel_id: row.channel_id,
+			channel_name: row.channel_name,
+			requests: row.requests,
+			tokens: row.tokens,
+		})),
+		byToken: byToken.map((row) => ({
+			token_id: row.token_id,
+			token_name: row.token_name,
+			requests: row.requests,
+			tokens: row.tokens,
+		})),
 	});
+});
+
+/**
+ * Manual rollup trigger (admin): POST { date: "YYYY-MM-DD" } rolls one date;
+ * an empty body backfills every date with raw logs but no rollup rows yet
+ * (first-deploy full backfill). Idempotent either way.
+ */
+dashboard.post("/rollup", async (c) => {
+	const body = (await c.req.json().catch(() => null)) as {
+		date?: unknown;
+	} | null;
+	if (
+		!body ||
+		body.date === undefined ||
+		body.date === null ||
+		body.date === ""
+	) {
+		const rolled = await rollupBackfill(c.env.DB);
+		return c.json({ rolled });
+	}
+	if (typeof body.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
+		return jsonError(c, 400, "date must be YYYY-MM-DD", "invalid_date");
+	}
+	await rollupDate(c.env.DB, body.date);
+	return c.json({ rolled: [body.date] });
 });
 
 export default dashboard;
