@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "后端质量门禁与禁则，检查基线"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "校验迁移与 schema.sql 是否同步"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "校验 usage 口径未与转换层冲突（防二次折算）"}
+{"file": ".trellis/spec/api-worker-ui/frontend/quality-guidelines.md", "reason": "前端 0-error 门禁与 a11y 清偿要求"}
+{"file": ".trellis/spec/api-worker-ui/frontend/type-safety.md", "reason": "校验新类型集中在 types.ts、snake_case 直通"}

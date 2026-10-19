@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引：routes 薄壳 + services 下沉、挂载点约定"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "D1 迁移与 schema.sql 同步规则，新增 0024 迁移必读"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "协议转换器 usage 末 chunk 惯例与 cache 口径折算契约，避免与转换层二次叠加"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁 check/typecheck/test、Biome 规则、命名禁则"}
+{"file": ".trellis/spec/api-worker-ui/frontend/index.md", "reason": "apps/ui 前端规范索引"}
+{"file": ".trellis/spec/api-worker-ui/frontend/component-guidelines.md", "reason": "Tailwind 色系、a11y 约定，仪表盘卡片与 mini bar 需遵循"}
+{"file": ".trellis/spec/api-worker-ui/frontend/type-safety.md", "reason": "类型集中在 core/types.ts、snake_case 直通惯例"}
