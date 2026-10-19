@@ -459,6 +459,18 @@ userApi.post("/checkin", async (c) => {
 });
 
 /**
+ * Cache hit rate: SUM(cached_input_tokens) / SUM(prompt_tokens where
+ * cached_input_tokens IS NOT NULL). Rows without cache data are excluded
+ * from the denominator (NULL ≠ 0); no data → null.
+ */
+function computeCacheRate(
+	cachedTokens: number,
+	cachePromptBase: number,
+): number | null {
+	return cachePromptBase > 0 ? cachedTokens / cachePromptBase : null;
+}
+
+/**
  * Returns dashboard data for the current user.
  */
 userApi.get("/dashboard", async (c) => {
@@ -469,7 +481,10 @@ userApi.get("/dashboard", async (c) => {
 		`SELECT
 			COUNT(*) as total_requests,
 			COALESCE(SUM(u.total_tokens), 0) as total_tokens,
-			COALESCE(SUM(u.cost), 0) as total_cost
+			COALESCE(SUM(u.cost), 0) as total_cost,
+			COALESCE(SUM(u.cached_input_tokens), 0) as cached_tokens,
+			COALESCE(SUM(u.cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(CASE WHEN u.cached_input_tokens IS NOT NULL THEN u.prompt_tokens ELSE 0 END), 0) as cache_prompt_base
 		FROM usage_logs u
 		JOIN tokens t ON u.token_id = t.id
 		WHERE t.user_id = ?`,
@@ -479,13 +494,18 @@ userApi.get("/dashboard", async (c) => {
 			total_requests: number;
 			total_tokens: number;
 			total_cost: number;
+			cached_tokens: number;
+			cache_creation_tokens: number;
+			cache_prompt_base: number;
 		}>();
 
 	const recentUsage = await c.env.DB.prepare(
 		`SELECT
 			DATE(u.created_at) as day,
 			COUNT(*) as requests,
-			COALESCE(SUM(u.cost), 0) as cost
+			COALESCE(SUM(u.cost), 0) as cost,
+			COALESCE(SUM(u.cached_input_tokens), 0) as cached_tokens,
+			COALESCE(SUM(CASE WHEN u.cached_input_tokens IS NOT NULL THEN u.prompt_tokens ELSE 0 END), 0) as cache_prompt_base
 		FROM usage_logs u
 		JOIN tokens t ON u.token_id = t.id
 		WHERE t.user_id = ?
@@ -494,7 +514,13 @@ userApi.get("/dashboard", async (c) => {
 		LIMIT 30`,
 	)
 		.bind(userId)
-		.all();
+		.all<{
+			day: string;
+			requests: number;
+			cost: number;
+			cached_tokens: number;
+			cache_prompt_base: number;
+		}>();
 
 	const checkinReward = await getCheckinReward(c.env.DB);
 	const ldcPaymentEnabled = await getLdcPaymentEnabled(c.env.DB);
@@ -507,12 +533,33 @@ userApi.get("/dashboard", async (c) => {
 		.first();
 	const checkedInToday = Boolean(checkinRow);
 
+	const summaryRow = summary ?? {
+		total_requests: 0,
+		total_tokens: 0,
+		total_cost: 0,
+		cached_tokens: 0,
+		cache_creation_tokens: 0,
+		cache_prompt_base: 0,
+	};
+
 	return c.json({
 		balance: user.balance,
-		total_requests: summary?.total_requests ?? 0,
-		total_tokens: summary?.total_tokens ?? 0,
-		total_cost: summary?.total_cost ?? 0,
-		recent_usage: recentUsage.results ?? [],
+		total_requests: summaryRow.total_requests,
+		total_tokens: summaryRow.total_tokens,
+		total_cost: summaryRow.total_cost,
+		cached_tokens: summaryRow.cached_tokens,
+		cache_creation_tokens: summaryRow.cache_creation_tokens,
+		cache_rate: computeCacheRate(
+			summaryRow.cached_tokens,
+			summaryRow.cache_prompt_base,
+		),
+		recent_usage: (recentUsage.results ?? []).map((row) => ({
+			day: row.day,
+			requests: row.requests,
+			cost: row.cost,
+			cached_tokens: row.cached_tokens,
+			cache_rate: computeCacheRate(row.cached_tokens, row.cache_prompt_base),
+		})),
 		checked_in_today: checkedInToday,
 		checkin_reward: checkinReward,
 		ldc_payment_enabled: ldcPaymentEnabled,
