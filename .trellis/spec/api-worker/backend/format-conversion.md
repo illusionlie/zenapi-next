@@ -22,7 +22,7 @@
 
 ### 3.1 usage 必须「单末 chunk、完整三值」
 
-`utils/usage.ts` 的 `parseUsageFromSse` 对流内 usage 候选**取最后一个**（last-wins）。转换器产出的 OpenAI 格式流，usage 只允许出现在终止 chunk 且 prompt/completion/total 三值齐全——拆进 `message_start` 会导致落库 `prompt_tokens` 恒 0、计费低估（本任务修复的真实 bug）。
+转换器产出的 OpenAI 格式流，usage 仍只允许出现在终止 chunk 且 prompt/completion/total 三值齐全（生产侧契约不变）。解析侧自 2026-10-18 起 `parseUsageFromSse` 不再 last-wins，改为 **raw usage 对象逐字段合并**（非 null 覆盖、null/缺失保留，支持 `message.usage` 兜底），流结束才 `normalizeUsage` 一次——拆进 `message_start` 不再丢 prompt/缓存字段（缓存统计依赖此行为，详见 [usage-accounting](./usage-accounting.md)）。
 
 ### 3.2 usage 口径换算（两 API 相反，最易踩坑）
 
