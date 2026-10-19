@@ -1,8 +1,44 @@
 import type { DashboardData } from "../core/types";
+import { cacheRateColor, formatCacheRate } from "../core/utils";
 
 type DashboardViewProps = {
 	dashboard: DashboardData | null;
 };
+
+/**
+ * Renders a cache hit rate cell: token count + percentage + mini bar.
+ * Null rate (no upstream cache data) renders as "—".
+ *
+ * Args:
+ *   cachedTokens: Cached input token count for the row.
+ *   cacheRate: Cache hit rate fraction or null.
+ *
+ * Returns:
+ *   Table cell JSX element.
+ */
+const CacheRateCell = ({
+	cachedTokens,
+	cacheRate,
+}: {
+	cachedTokens: number;
+	cacheRate: number | null;
+}) => (
+	<td class="border-b border-stone-200 px-3 py-2.5 text-left text-sm text-stone-700">
+		<div class="flex items-center gap-2">
+			<span class="w-20 shrink-0 tabular-nums">{cachedTokens}</span>
+			<div class="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-stone-100">
+				<div
+					class="h-full rounded-full"
+					style={{
+						width: `${Math.round((cacheRate ?? 0) * 100)}%`,
+						backgroundColor: cacheRateColor(cacheRate),
+					}}
+				/>
+			</div>
+			<span class="text-stone-500">{formatCacheRate(cacheRate)}</span>
+		</div>
+	</td>
+);
 
 /**
  * Renders the dashboard summary and charts.
@@ -29,7 +65,7 @@ export const DashboardView = ({ dashboard }: DashboardViewProps) => {
 		: 0;
 	return (
 		<div class="space-y-5">
-			<div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
+			<div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
 				<div class="flex flex-col gap-1.5 rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
 					<span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs text-stone-500">
 						总请求
@@ -50,6 +86,17 @@ export const DashboardView = ({ dashboard }: DashboardViewProps) => {
 					</div>
 					<span class="font-['Space_Grotesk'] text-xs text-stone-500">
 						累计消耗
+					</span>
+				</div>
+				<div class="flex flex-col gap-1.5 rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
+					<span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs text-stone-500">
+						缓存命中率
+					</span>
+					<div class="text-2xl font-semibold text-stone-900">
+						{formatCacheRate(dashboard.summary.cache_rate)}
+					</div>
+					<span class="font-['Space_Grotesk'] text-xs text-stone-500">
+						命中 {dashboard.summary.cached_tokens} tokens
 					</span>
 				</div>
 				<div class="flex flex-col gap-1.5 rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
@@ -82,6 +129,9 @@ export const DashboardView = ({ dashboard }: DashboardViewProps) => {
 									<th class="border-b border-stone-200 px-3 py-2.5 text-left text-xs uppercase tracking-widest text-stone-500">
 										Tokens
 									</th>
+									<th class="border-b border-stone-200 px-3 py-2.5 text-left text-xs uppercase tracking-widest text-stone-500">
+										缓存命中
+									</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -96,6 +146,10 @@ export const DashboardView = ({ dashboard }: DashboardViewProps) => {
 										<td class="border-b border-stone-200 px-3 py-2.5 text-left text-sm text-stone-700">
 											{row.tokens}
 										</td>
+										<CacheRateCell
+											cachedTokens={row.cached_tokens}
+											cacheRate={row.cache_rate ?? null}
+										/>
 									</tr>
 								))}
 							</tbody>

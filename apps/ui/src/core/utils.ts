@@ -174,3 +174,32 @@ export const buildPageItems = (current: number, total: number): PageItem[] => {
 		return true;
 	});
 };
+
+/**
+ * Formats a cache hit rate (fraction 0–1) for display. Null/undefined means
+ * upstream never reported cache tokens — renders as "—", never 0%.
+ *
+ * Args:
+ *   rate: Cache hit rate fraction or null.
+ *
+ * Returns:
+ *   Percentage string or "—".
+ */
+export const formatCacheRate = (rate: number | null | undefined) =>
+	rate === null || rate === undefined ? "—" : `${Math.round(rate * 100)}%`;
+
+/**
+ * Bar color for cache hit rates, following monitoring-shared.ts band style.
+ *
+ * Args:
+ *   rate: Cache hit rate fraction or null.
+ *
+ * Returns:
+ *   Hex color string.
+ */
+export const cacheRateColor = (rate: number | null | undefined) => {
+	if (rate === null || rate === undefined) return "#e7e5e4"; // stone-200
+	if (rate >= 0.7) return "#22c55e"; // green-500
+	if (rate >= 0.3) return "#eab308"; // yellow-500
+	return "#ef4444"; // red-500
+};

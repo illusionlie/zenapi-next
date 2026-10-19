@@ -73,8 +73,17 @@ export type DashboardData = {
 		total_tokens: number;
 		avg_latency: number;
 		total_errors: number;
+		cached_tokens: number;
+		cache_creation_tokens: number;
+		cache_rate: number | null;
 	};
-	byDay: Array<{ day: string; requests: number; tokens: number }>;
+	byDay: Array<{
+		day: string;
+		requests: number;
+		tokens: number;
+		cached_tokens: number;
+		cache_rate: number | null;
+	}>;
 	byModel: Array<{ model: string; requests: number; tokens: number }>;
 	byChannel: Array<{ channel_name: string; requests: number; tokens: number }>;
 	byToken: Array<{ token_name: string; requests: number; tokens: number }>;
@@ -353,7 +362,16 @@ export type UserDashboardData = {
 	total_requests: number;
 	total_tokens: number;
 	total_cost: number;
-	recent_usage: Array<{ day: string; requests: number; cost: number }>;
+	cached_tokens: number;
+	cache_creation_tokens: number;
+	cache_rate: number | null;
+	recent_usage: Array<{
+		day: string;
+		requests: number;
+		cost: number;
+		cached_tokens: number;
+		cache_rate: number | null;
+	}>;
 	checked_in_today: boolean;
 	checkin_reward: number;
 	ldc_payment_enabled: boolean;

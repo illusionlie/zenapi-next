@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "hono/jsx/dom";
 import { createApiFetch } from "../core/api";
 import { toast } from "../core/toast";
 import type { User, UserDashboardData } from "../core/types";
+import { cacheRateColor, formatCacheRate } from "../core/utils";
 
 type UserDashboardProps = {
 	data: UserDashboardData | null;
@@ -225,6 +226,17 @@ export const UserDashboard = ({
 						{formatCost(data.total_cost)}
 					</p>
 				</div>
+				<div class="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+					<p class="text-xs font-medium uppercase tracking-widest text-stone-400">
+						缓存命中率
+					</p>
+					<p class="mt-1 font-['Space_Grotesk'] text-2xl font-semibold text-stone-900">
+						{formatCacheRate(data.cache_rate)}
+					</p>
+					<p class="text-xs text-stone-500">
+						命中 {formatNumber(data.cached_tokens)} tokens
+					</p>
+				</div>
 			</div>
 
 			{/* Account binding */}
@@ -276,7 +288,8 @@ export const UserDashboard = ({
 								<tr class="border-b border-stone-100 text-xs uppercase tracking-widest text-stone-400">
 									<th class="pb-2 pr-4 font-medium">日期</th>
 									<th class="pb-2 pr-4 font-medium">请求数</th>
-									<th class="pb-2 font-medium">费用</th>
+									<th class="pb-2 pr-4 font-medium">费用</th>
+									<th class="pb-2 font-medium">缓存命中</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -284,7 +297,26 @@ export const UserDashboard = ({
 									<tr class="border-b border-stone-50">
 										<td class="py-2 pr-4 text-stone-600">{item.day}</td>
 										<td class="py-2 pr-4 text-stone-600">{item.requests}</td>
-										<td class="py-2 text-stone-600">{formatCost(item.cost)}</td>
+										<td class="py-2 pr-4 text-stone-600">
+											{formatCost(item.cost)}
+										</td>
+										<td class="py-2 text-stone-600">
+											<div class="flex items-center gap-2">
+												<span class="w-14 shrink-0 tabular-nums">
+													{formatNumber(item.cached_tokens)}
+												</span>
+												<div class="h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-stone-100">
+													<div
+														class="h-full rounded-full"
+														style={{
+															width: `${Math.round((item.cache_rate ?? 0) * 100)}%`,
+															backgroundColor: cacheRateColor(item.cache_rate),
+														}}
+													/>
+												</div>
+												<span>{formatCacheRate(item.cache_rate)}</span>
+											</div>
+										</td>
 									</tr>
 								))}
 							</tbody>
