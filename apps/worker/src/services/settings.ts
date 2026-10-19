@@ -1,5 +1,10 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import {
+	getTtlCache,
+	PROXY_SETTINGS_CACHE_TTL_MS,
+	type TtlCache,
+} from "../utils/cache";
+import {
 	PROXY_EXTRA_HEADERS_KEY,
 	PROXY_REMOVE_HEADERS_KEY,
 } from "../utils/proxy-headers";
@@ -34,6 +39,30 @@ async function upsertSetting(
 		)
 		.bind(key, value, nowIso())
 		.run();
+}
+
+/** Raw settings-table read: key → stored value (null for a NULL column). */
+export type SettingsRawMap = Record<string, string | null>;
+
+/**
+ * Reads the given settings keys with a single `key IN` SQL query.
+ * Absent keys are simply missing from the returned map — callers normalize
+ * to null when looking values up.
+ */
+async function readSettingsRawMap(
+	db: D1Database,
+	keys: readonly string[],
+): Promise<SettingsRawMap> {
+	const placeholders = keys.map(() => "?").join(", ");
+	const result = await db
+		.prepare(`SELECT key, value FROM settings WHERE key IN (${placeholders})`)
+		.bind(...keys)
+		.all<{ key: string; value: string | null }>();
+	const map: SettingsRawMap = {};
+	for (const row of result.results ?? []) {
+		map[String(row.key)] = row.value ?? null;
+	}
+	return map;
 }
 
 function parsePositiveNumber(value: string | null, fallback: number): number {
@@ -434,22 +463,27 @@ export async function loadProxyRetryConfig(
 	db: D1Database,
 	envFallback?: ProxyRetryEnvFallback,
 ): Promise<ProxyRetryConfig> {
-	const result = await db
-		.prepare("SELECT key, value FROM settings WHERE key IN (?, ?)")
-		.bind(PROXY_RETRY_ROUNDS_KEY, PROXY_RETRY_DELAY_MS_KEY)
-		.all<{ key: string; value: string | null }>();
-	let roundsRaw: string | null = null;
-	let delayMsRaw: string | null = null;
-	for (const row of result.results ?? []) {
-		if (row.key === PROXY_RETRY_ROUNDS_KEY) {
-			roundsRaw = row.value ?? null;
-		} else if (row.key === PROXY_RETRY_DELAY_MS_KEY) {
-			delayMsRaw = row.value ?? null;
-		}
-	}
+	const raw = await readSettingsRawMap(db, [
+		PROXY_RETRY_ROUNDS_KEY,
+		PROXY_RETRY_DELAY_MS_KEY,
+	]);
+	return resolveProxyRetryConfig(raw, envFallback);
+}
+
+/**
+ * Pure resolver for the retry config: raw settings map (+ optional env
+ * fallback) → config, walking settings → env → default with read-side
+ * clamping. Kept DB-free so callers reading the settings table through the
+ * shared cached snapshot (loadProxySettingsCached) get the exact same
+ * fallback-chain semantics, re-evaluated on every call.
+ */
+export function resolveProxyRetryConfig(
+	raw: SettingsRawMap,
+	envFallback?: ProxyRetryEnvFallback,
+): ProxyRetryConfig {
 	const rounds =
 		parseBoundedRetryInt(
-			roundsRaw,
+			raw[PROXY_RETRY_ROUNDS_KEY] ?? null,
 			MIN_PROXY_RETRY_ROUNDS,
 			MAX_PROXY_RETRY_ROUNDS,
 		) ??
@@ -461,7 +495,7 @@ export async function loadProxyRetryConfig(
 		DEFAULT_PROXY_RETRY_ROUNDS;
 	const delayMs =
 		parseBoundedRetryInt(
-			delayMsRaw,
+			raw[PROXY_RETRY_DELAY_MS_KEY] ?? null,
 			MIN_PROXY_RETRY_DELAY_MS,
 			MAX_PROXY_RETRY_DELAY_MS,
 		) ??
@@ -492,6 +526,54 @@ export async function setProxyRetryDelayMs(
 	delayMs: number,
 ): Promise<void> {
 	await upsertSetting(db, PROXY_RETRY_DELAY_MS_KEY, delayMs.toString());
+}
+
+// Proxy runtime settings snapshot (header policy ×2 + retry ×2, cached read)
+
+/**
+ * The four settings keys the proxy hot path consumes, read in one query:
+ * global header policy (extra/remove) + retry config (rounds/delay).
+ */
+export const PROXY_SETTING_KEYS = [
+	PROXY_EXTRA_HEADERS_KEY,
+	PROXY_REMOVE_HEADERS_KEY,
+	PROXY_RETRY_ROUNDS_KEY,
+	PROXY_RETRY_DELAY_MS_KEY,
+] as const;
+
+const PROXY_SETTINGS_CACHE_KEY = "proxy";
+
+/**
+ * Per-db cache registry. Production binds one D1Database object per isolate,
+ * so entries persist across requests; tests pass distinct mock dbs and never
+ * share cached state.
+ */
+const proxySettingsCaches = new WeakMap<D1Database, TtlCache<SettingsRawMap>>();
+
+/**
+ * Loads the four proxy runtime settings keys with a single SQL query,
+ * memoized PROXY_SETTINGS_CACHE_TTL_MS per db binding. Only the raw
+ * settings-table read is cached — callers re-run the pure fallback-chain /
+ * clamp / fail-open parsers (resolveProxyRetryConfig, parseHeaderPolicyFromRaw)
+ * on every call, so the tiered fallback semantics are untouched (the existing
+ * settings tests keep passing unchanged). Management edits become visible
+ * within the TTL window (documented staleness bound, AGENTS §8).
+ */
+export async function loadProxySettingsCached(
+	db: D1Database,
+): Promise<SettingsRawMap> {
+	const cache = getTtlCache(
+		proxySettingsCaches,
+		db,
+		PROXY_SETTINGS_CACHE_TTL_MS,
+	);
+	const hit = cache.get(PROXY_SETTINGS_CACHE_KEY);
+	if (hit !== undefined) {
+		return hit;
+	}
+	const raw = await readSettingsRawMap(db, PROXY_SETTING_KEYS);
+	cache.set(PROXY_SETTINGS_CACHE_KEY, raw);
+	return raw;
 }
 
 // Turnstile (login/register human verification)

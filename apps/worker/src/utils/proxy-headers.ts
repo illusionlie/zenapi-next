@@ -71,6 +71,25 @@ export function parseRemoveHeaders(
 	return result;
 }
 
+/** Raw settings-map shape accepted by the pure policy parser. */
+export type ProxySettingsRaw = Record<string, string | null | undefined>;
+
+/**
+ * Pure resolver: raw settings map → header policy. Malformed stored values
+ * degrade to empty config (fail-open), same as loadProxyHeaderPolicy. Used
+ * directly by consumers reading the settings table through the shared cached
+ * snapshot (services/settings.ts loadProxySettingsCached) so the policy is
+ * re-parsed per request even when the raw read is cached.
+ */
+export function parseHeaderPolicyFromRaw(
+	raw: ProxySettingsRaw,
+): ProxyHeaderPolicy {
+	return {
+		extraHeaders: parseExtraHeaders(raw[PROXY_EXTRA_HEADERS_KEY]) ?? {},
+		removeHeaders: parseRemoveHeaders(raw[PROXY_REMOVE_HEADERS_KEY]) ?? [],
+	};
+}
+
 /**
  * Loads the two proxy header settings and merges them into a policy.
  * Single SQL query with both keys bound; malformed stored values are
@@ -83,16 +102,11 @@ export async function loadProxyHeaderPolicy(
 		.prepare("SELECT key, value FROM settings WHERE key IN (?, ?)")
 		.bind(PROXY_EXTRA_HEADERS_KEY, PROXY_REMOVE_HEADERS_KEY)
 		.all<{ key: string; value: string | null }>();
-	let extraHeaders: Record<string, string> = {};
-	let removeHeaders: string[] = [];
+	const raw: ProxySettingsRaw = {};
 	for (const row of result.results ?? []) {
-		if (row.key === PROXY_EXTRA_HEADERS_KEY) {
-			extraHeaders = parseExtraHeaders(row.value) ?? {};
-		} else if (row.key === PROXY_REMOVE_HEADERS_KEY) {
-			removeHeaders = parseRemoveHeaders(row.value) ?? [];
-		}
+		raw[row.key] = row.value ?? null;
 	}
-	return { extraHeaders, removeHeaders };
+	return parseHeaderPolicyFromRaw(raw);
 }
 
 /**

@@ -7,7 +7,11 @@ import {
 	selectTargetFormat,
 } from "../services/channel-routing";
 import { parseApiFormats } from "../services/channel-types";
-import { type ChannelRecord, createWeightedOrder } from "../services/channels";
+import {
+	type ChannelRecord,
+	createWeightedOrder,
+	getActiveChannelsCached,
+} from "../services/channels";
 import {
 	anthropicToOpenaiRequest,
 	createOpenaiToAnthropicStreamTransform,
@@ -18,7 +22,10 @@ import {
 	loadChannelAliasOnlyMap,
 } from "../services/model-aliases";
 import { calculateCost, getModelPrice } from "../services/pricing";
-import { loadProxyRetryConfig } from "../services/settings";
+import {
+	loadProxySettingsCached,
+	resolveProxyRetryConfig,
+} from "../services/settings";
 import { recordUsage } from "../services/usage";
 import {
 	injectSystemPromptAnthropic,
@@ -28,9 +35,10 @@ import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
 import { parseApiKeys, shuffleArray } from "../utils/keys";
 import { isModelAllowedByAll } from "../utils/model-allowlist";
+import { runPostResponse } from "../utils/post-response";
 import {
 	applyHeaderPolicy,
-	loadProxyHeaderPolicy,
+	parseHeaderPolicyFromRaw,
 } from "../utils/proxy-headers";
 import { isRetryableStatus, sleep } from "../utils/retry";
 import { cfSafeUrl } from "../utils/url";
@@ -43,10 +51,6 @@ import {
 import { channelSupportsModel, filterAllowedChannels } from "./proxy";
 
 const anthropicProxy = new Hono<AppEnv>();
-
-type ExecutionContextLike = {
-	waitUntil: (promise: Promise<unknown>) => void;
-};
 
 /**
  * Anthropic Messages API compatible proxy handler.
@@ -76,32 +80,34 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 		return jsonError(c, 403, "model_not_allowed", "model_not_allowed");
 	}
 
-	// Resolve per-channel aliases for this model name
-	const channelAliasHits = model
-		? await loadChannelAliasesByAlias(c.env.DB, model)
-		: [];
+	// 热路径读并行合一（design.md，与 proxy.ts 同构）：per-channel 别名解析、
+	// aliasOnly 全图、活跃渠道、代理运行时 settings（4 键一次 IN 查询）进单个
+	// Promise.all——鉴权 JOIN 之后只剩这一个串行 RTT 阶段。channels / 别名走
+	// 10s TTL 缓存、settings 只缓存 raw 读（30s）；头策略 fail-open 解析与
+	// 重试配置三级回退链（settings → env → 默认，含 clamp）从 raw map 纯解析，
+	// 每次照常执行。
+	const [
+		channelAliasHits,
+		perChannelAliasOnlyMap,
+		activeChannels,
+		proxySettings,
+	] = await Promise.all([
+		model ? loadChannelAliasesByAlias(c.env.DB, model) : Promise.resolve([]),
+		loadChannelAliasOnlyMap(c.env.DB),
+		getActiveChannelsCached(c.env.DB),
+		loadProxySettingsCached(c.env.DB),
+	]);
 	const channelAliasHitMap = new Map(
 		channelAliasHits.map((h) => [h.channel_id, h]),
 	);
-
-	// Load per-channel alias-only map
-	const perChannelAliasOnlyMap = await loadChannelAliasOnlyMap(c.env.DB);
+	const headerPolicy = parseHeaderPolicyFromRaw(proxySettings);
+	const retryConfig = resolveProxyRetryConfig(proxySettings, {
+		rounds: c.env.PROXY_RETRY_ROUNDS,
+		delayMs: c.env.PROXY_RETRY_DELAY_MS,
+	});
 
 	// Convert Anthropic request -> OpenAI format for internal use
 	const openaiBody = parsedBody ? anthropicToOpenaiRequest(parsedBody) : null;
-
-	// 全局头策略、重试配置与活跃渠道查询并行预载：每请求只读两次库，重试轮复用
-	const [channelResult, headerPolicy, retryConfig] = await Promise.all([
-		c.env.DB.prepare("SELECT * FROM channels WHERE status = ?")
-			.bind("active")
-			.all(),
-		loadProxyHeaderPolicy(c.env.DB),
-		loadProxyRetryConfig(c.env.DB, {
-			rounds: c.env.PROXY_RETRY_ROUNDS,
-			delayMs: c.env.PROXY_RETRY_DELAY_MS,
-		}),
-	]);
-	const activeChannels = (channelResult.results ?? []) as ChannelRecord[];
 
 	// Resolve channel/model routing syntax (uses original model name)
 	const { targetChannel, actualModel } = resolveChannelRoute(
@@ -409,17 +415,21 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	const requestPath = "/anthropic/v1/messages";
 
 	if (!lastResponse) {
-		await recordUsage(c.env.DB, {
-			tokenId: tokenRecord.id,
-			model: effectiveModel,
-			requestPath,
-			totalTokens: 0,
-			latencyMs,
-			firstTokenLatencyMs: isStream ? null : latencyMs,
-			stream: isStream,
-			status: "error",
-			errorMessage: "upstream_unavailable",
-		});
+		// Usage recording is post-response: never blocks the error reply
+		// (waitUntil when available, fire-and-forget otherwise).
+		runPostResponse(c, () =>
+			recordUsage(c.env.DB, {
+				tokenId: tokenRecord.id,
+				model: effectiveModel,
+				requestPath,
+				totalTokens: 0,
+				latencyMs,
+				firstTokenLatencyMs: isStream ? null : latencyMs,
+				stream: isStream,
+				status: "error",
+				errorMessage: "upstream_unavailable",
+			}),
+		);
 		return jsonError(c, 502, "upstream_unavailable", "upstream_unavailable");
 	}
 
@@ -485,8 +495,6 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 		const headerUsage = parseUsageFromHeaders(lastResponse.headers);
 
 		if (isStream) {
-			const executionCtx = (c as { executionCtx?: ExecutionContextLike })
-				.executionCtx;
 			const task = parseUsageFromSse(lastResponse.clone())
 				.then((streamUsage) => {
 					const usage = headerUsage ?? streamUsage.usage;
@@ -500,11 +508,11 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						/* truly lost */
 					}
 				});
-			if (executionCtx?.waitUntil) {
-				executionCtx.waitUntil(task);
-			} else {
-				task.catch(() => undefined);
-			}
+			// Same helper as proxy.ts: waitUntil when a Workers ExecutionContext is
+			// available, fire-and-forget otherwise. This also fixes the former bare
+			// `(c as {executionCtx}).executionCtx` assertion, whose getter throws
+			// outside the Workers runtime (quality-guidelines gotcha).
+			runPostResponse(c, () => task);
 		} else {
 			let jsonUsage: NormalizedUsage | null = null;
 			if (
@@ -522,7 +530,9 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 					}
 				}
 			}
-			await recordFn(jsonUsage ?? headerUsage, latencyMs);
+			// Non-stream responses no longer await the usage write — billing lands
+			// post-response (waitUntil / fire-and-forget degradation).
+			runPostResponse(c, () => recordFn(jsonUsage ?? headerUsage, latencyMs));
 		}
 	}
 

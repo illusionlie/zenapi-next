@@ -15,6 +15,12 @@ export type TokenRecord = {
 	allowed_channels: string | null;
 	allowed_models: string | null;
 	user_id: string | null;
+	/** Joined users.balance (null when the token has no user or the user row is missing). */
+	user_balance?: number | null;
+	/** Joined users.status (null when the token has no user or the user row is missing). */
+	user_status?: string | null;
+	/** Joined users.allowed_models raw TEXT (null when the token has no user or the user row is missing). */
+	user_allowed_models_raw?: string | null;
 	/** User-level model allowlist (parsed); null/undefined = unrestricted. */
 	user_allowed_models?: string[] | null;
 	/** Token-level model allowlist (parsed from tokens.allowed_models); null/undefined = unrestricted. */
@@ -31,8 +37,21 @@ export const tokenAuth = createMiddleware<AppEnv>(async (c, next) => {
 	}
 
 	const tokenHash = await sha256Hex(token);
+	// Single-round-trip auth: tokens LEFT JOIN users replaces the former two
+	// serial queries (tokens → users by user_id). User-side columns are all
+	// aliased `user_*` — both tables share the `status` / `allowed_models`
+	// column names, which must never be selected bare. LEFT JOIN keeps no-user
+	// tokens working (user fields come back null, user gates below skipped
+	// exactly as before); a dangling user_id yields null user fields and hits
+	// the same `user_disabled` rejection as the old missing-row path.
 	const record = await c.env.DB.prepare(
-		"SELECT id, name, quota_total, quota_used, status, allowed_channels, allowed_models, user_id FROM tokens WHERE key_hash = ?",
+		`SELECT t.id, t.name, t.quota_total, t.quota_used, t.status,
+		        t.allowed_channels, t.allowed_models, t.user_id,
+		        u.balance AS user_balance, u.status AS user_status,
+		        u.allowed_models AS user_allowed_models_raw
+		 FROM tokens t
+		 LEFT JOIN users u ON u.id = t.user_id
+		 WHERE t.key_hash = ?`,
 	)
 		.bind(tokenHash)
 		.first<TokenRecord>();
@@ -58,25 +77,18 @@ export const tokenAuth = createMiddleware<AppEnv>(async (c, next) => {
 		return jsonError(c, 402, "quota_exceeded", "quota_exceeded");
 	}
 
-	// User-associated tokens: check user status and balance
+	// User-associated tokens: check user status and balance from the joined
+	// columns (null user fields = missing user row → same rejections as the
+	// old two-query flow)
 	let userAllowedModels: string[] | null = null;
 	if (record.user_id) {
-		const user = await c.env.DB.prepare(
-			"SELECT balance, status, allowed_models FROM users WHERE id = ?",
-		)
-			.bind(record.user_id)
-			.first<{
-				balance: number;
-				status: string;
-				allowed_models: string | null;
-			}>();
-		if (user?.status !== "active") {
+		if (record.user_status !== "active") {
 			return jsonError(c, 403, "user_disabled", "user_disabled");
 		}
-		if (user.balance <= 0) {
+		if (Number(record.user_balance ?? 0) <= 0) {
 			return jsonError(c, 402, "insufficient_balance", "insufficient_balance");
 		}
-		userAllowedModels = parseAllowlist(user.allowed_models);
+		userAllowedModels = parseAllowlist(record.user_allowed_models_raw);
 	}
 
 	c.set("tokenRecord", {

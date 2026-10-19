@@ -1,4 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { ALIAS_CACHE_TTL_MS, getTtlCache, type TtlCache } from "../utils/cache";
 import { nowIso } from "../utils/time";
 
 type AliasRow = {
@@ -225,24 +226,47 @@ export async function saveChannelAliases(
 /**
  * Returns per-channel alias hits for a given alias name.
  * Used by the proxy to find channels that have a per-channel alias for a model.
+ * Memoized ALIAS_CACHE_TTL_MS per db binding (documented staleness bound,
+ * AGENTS §8) — the only consumers are the two proxy hot paths, which treat
+ * the returned array as read-only. `max` caps per-alias key growth: alias
+ * keys come from request model names, so the coarse clear-all cap keeps a
+ * hostile key space from bloating the isolate.
  */
+type ChannelAliasHit = {
+	channel_id: string;
+	model_id: string;
+	alias_only: boolean;
+};
+
+const channelAliasHitsCaches = new WeakMap<
+	D1Database,
+	TtlCache<ChannelAliasHit[]>
+>();
+
 export async function loadChannelAliasesByAlias(
 	db: D1Database,
 	alias: string,
-): Promise<
-	Array<{ channel_id: string; model_id: string; alias_only: boolean }>
-> {
+): Promise<ChannelAliasHit[]> {
+	const cache = getTtlCache(channelAliasHitsCaches, db, ALIAS_CACHE_TTL_MS, {
+		max: 500,
+	});
+	const hit = cache.get(alias);
+	if (hit !== undefined) {
+		return hit;
+	}
 	const result = await db
 		.prepare(
 			"SELECT channel_id, model_id, alias_only FROM channel_model_aliases WHERE alias = ?",
 		)
 		.bind(alias)
 		.all<{ channel_id: string; model_id: string; alias_only: number }>();
-	return (result.results ?? []).map((r) => ({
+	const hits: ChannelAliasHit[] = (result.results ?? []).map((r) => ({
 		channel_id: r.channel_id,
 		model_id: r.model_id,
 		alias_only: r.alias_only === 1,
 	}));
+	cache.set(alias, hits);
+	return hits;
 }
 
 /**
@@ -292,10 +316,25 @@ export async function loadChannelPrimaryNameMap(
 /**
  * Returns a map of channelId → Set<modelId> for models with alias_only=1.
  * Used by the proxy to check per-channel alias_only status.
+ * Memoized ALIAS_CACHE_TTL_MS per db binding (documented staleness bound,
+ * AGENTS §8) — the only consumers are the two proxy hot paths, which treat
+ * the returned map as read-only.
  */
+const aliasOnlyMapCaches = new WeakMap<
+	D1Database,
+	TtlCache<Map<string, Set<string>>>
+>();
+
+const ALIAS_ONLY_MAP_CACHE_KEY = "all";
+
 export async function loadChannelAliasOnlyMap(
 	db: D1Database,
 ): Promise<Map<string, Set<string>>> {
+	const cache = getTtlCache(aliasOnlyMapCaches, db, ALIAS_CACHE_TTL_MS);
+	const hit = cache.get(ALIAS_ONLY_MAP_CACHE_KEY);
+	if (hit !== undefined) {
+		return hit;
+	}
 	const result = await db
 		.prepare(
 			"SELECT DISTINCT channel_id, model_id FROM channel_model_aliases WHERE alias_only = 1",
@@ -307,6 +346,7 @@ export async function loadChannelAliasOnlyMap(
 		existing.add(row.model_id);
 		map.set(row.channel_id, existing);
 	}
+	cache.set(ALIAS_ONLY_MAP_CACHE_KEY, map);
 	return map;
 }
 

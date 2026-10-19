@@ -13,6 +13,7 @@ import {
 	type ChannelRecord,
 	createWeightedOrder,
 	extractModels,
+	getActiveChannelsCached,
 } from "../services/channels";
 import {
 	anthropicToOpenaiResponse,
@@ -31,7 +32,10 @@ import {
 	loadChannelAliasOnlyMap,
 } from "../services/model-aliases";
 import { calculateCost, getModelPrice } from "../services/pricing";
-import { loadProxyRetryConfig } from "../services/settings";
+import {
+	loadProxySettingsCached,
+	resolveProxyRetryConfig,
+} from "../services/settings";
 import { recordUsage } from "../services/usage";
 import {
 	injectSystemPromptAnthropic,
@@ -45,10 +49,11 @@ import {
 	filterModelsByAllowlist,
 	isModelAllowedByAll,
 } from "../utils/model-allowlist";
+import { runPostResponse } from "../utils/post-response";
 import {
 	applyHeaderPolicy,
-	loadProxyHeaderPolicy,
 	type ProxyHeaderPolicy,
+	parseHeaderPolicyFromRaw,
 } from "../utils/proxy-headers";
 import { extractReasoningEffort } from "../utils/reasoning";
 import { isRetryableStatus, sleep } from "../utils/retry";
@@ -61,10 +66,6 @@ import {
 } from "../utils/usage";
 
 const proxy = new Hono<AppEnv>();
-
-type ExecutionContextLike = {
-	waitUntil: (promise: Promise<unknown>) => void;
-};
 
 export function channelSupportsModel(
 	channel: ChannelRecord,
@@ -561,16 +562,30 @@ proxy.all("/*", tokenAuth, async (c) => {
 		return jsonError(c, 403, "model_not_allowed", "model_not_allowed");
 	}
 
-	// Resolve per-channel aliases for this model name
-	const channelAliasHits = model
-		? await loadChannelAliasesByAlias(c.env.DB, model)
-		: [];
+	// 热路径读并行合一（design.md）：per-channel 别名解析、aliasOnly 全图、
+	// 活跃渠道、代理运行时 settings（4 键一次 IN 查询）进单个 Promise.all——
+	// 鉴权 JOIN 之后只剩这一个串行 RTT 阶段。channels / 别名走 10s TTL 缓存、
+	// settings 只缓存 raw 读（30s）；头策略 fail-open 解析与重试配置三级
+	// 回退链（settings → env → 默认，含 clamp）从 raw map 纯解析，每次照常执行。
+	const [
+		channelAliasHits,
+		perChannelAliasOnlyMap,
+		activeChannels,
+		proxySettings,
+	] = await Promise.all([
+		model ? loadChannelAliasesByAlias(c.env.DB, model) : Promise.resolve([]),
+		loadChannelAliasOnlyMap(c.env.DB),
+		getActiveChannelsCached(c.env.DB),
+		loadProxySettingsCached(c.env.DB),
+	]);
 	const channelAliasHitMap = new Map(
 		channelAliasHits.map((h) => [h.channel_id, h]),
 	);
-
-	// Load per-channel alias-only map
-	const perChannelAliasOnlyMap = await loadChannelAliasOnlyMap(c.env.DB);
+	const headerPolicy = parseHeaderPolicyFromRaw(proxySettings);
+	const retryConfig = resolveProxyRetryConfig(proxySettings, {
+		rounds: c.env.PROXY_RETRY_ROUNDS,
+		delayMs: c.env.PROXY_RETRY_DELAY_MS,
+	});
 
 	const reasoningEffort = extractReasoningEffort(parsedBody);
 	// Chat-only stream_options usage injection happens here for chat-shaped
@@ -602,19 +617,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 		}
 		requestText = JSON.stringify(parsedBody);
 	}
-
-	// 全局头策略、重试配置与活跃渠道查询并行预载：每请求只读两次库，重试轮复用
-	const [channelResult, headerPolicy, retryConfig] = await Promise.all([
-		c.env.DB.prepare("SELECT * FROM channels WHERE status = ?")
-			.bind("active")
-			.all(),
-		loadProxyHeaderPolicy(c.env.DB),
-		loadProxyRetryConfig(c.env.DB, {
-			rounds: c.env.PROXY_RETRY_ROUNDS,
-			delayMs: c.env.PROXY_RETRY_DELAY_MS,
-		}),
-	]);
-	const activeChannels = (channelResult.results ?? []) as ChannelRecord[];
 
 	// Resolve channel/model routing syntax (uses original model name)
 	const { targetChannel, actualModel } = resolveChannelRoute(
@@ -821,18 +823,22 @@ proxy.all("/*", tokenAuth, async (c) => {
 	const latencyMs = Date.now() - start;
 
 	if (!lastResponse) {
-		await recordUsage(c.env.DB, {
-			tokenId: tokenRecord.id,
-			model: effectiveModel,
-			requestPath: targetPath,
-			totalTokens: 0,
-			latencyMs,
-			firstTokenLatencyMs: isStream ? null : latencyMs,
-			stream: isStream,
-			reasoningEffort,
-			status: "error",
-			errorMessage: "upstream_unavailable",
-		});
+		// Usage recording is post-response: never blocks the error reply
+		// (waitUntil when available, fire-and-forget otherwise).
+		runPostResponse(c, () =>
+			recordUsage(c.env.DB, {
+				tokenId: tokenRecord.id,
+				model: effectiveModel,
+				requestPath: targetPath,
+				totalTokens: 0,
+				latencyMs,
+				firstTokenLatencyMs: isStream ? null : latencyMs,
+				stream: isStream,
+				reasoningEffort,
+				status: "error",
+				errorMessage: "upstream_unavailable",
+			}),
+		);
 		return jsonError(c, 502, "upstream_unavailable", "upstream_unavailable");
 	}
 
@@ -933,15 +939,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 				: "none";
 
 		if (isStream) {
-			// Hono's executionCtx getter throws outside the Workers runtime
-			// (e.g. the vitest request harness); degrade to the fire-and-forget
-			// fallback below in that case instead of failing the request.
-			let executionCtx: ExecutionContextLike | undefined;
-			try {
-				executionCtx = c.executionCtx;
-			} catch {
-				executionCtx = undefined;
-			}
 			const task = parseUsageFromSse(lastResponse.clone())
 				.then((streamUsage) => {
 					const usageValue = immediateUsage ?? streamUsage.usage;
@@ -962,14 +959,15 @@ proxy.all("/*", tokenAuth, async (c) => {
 						/* truly lost */
 					}
 				});
-			if (executionCtx?.waitUntil) {
-				executionCtx.waitUntil(task);
-			} else {
-				task.catch(() => undefined);
-			}
+			// Same helper as the non-stream / error paths: waitUntil when a Workers
+			// ExecutionContext is available, fire-and-forget otherwise (the task
+			// handles its own errors, so the helper's catch never fires here).
+			runPostResponse(c, () => task);
 		} else {
 			logUsage("immediate", immediateUsage, immediateSource);
-			await record(immediateUsage, latencyMs);
+			// Non-stream responses no longer await the usage write — billing lands
+			// post-response (waitUntil / fire-and-forget degradation).
+			runPostResponse(c, () => record(immediateUsage, latencyMs));
 		}
 	}
 
