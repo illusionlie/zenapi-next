@@ -3,7 +3,7 @@
 	"name": "p0-index-billing",
 	"title": "P0：索引补齐与计费原子性",
 	"description": "tokens/admin_sessions/usage_logs 缺失索引迁移 + 计费三写 db.batch 原子化与防负余额策略",
-	"status": "planning",
+	"status": "in_progress",
 	"dev_type": null,
 	"scope": null,
 	"package": null,

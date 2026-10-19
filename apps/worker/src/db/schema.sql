@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   updated_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS tokens_key_hash ON tokens(key_hash);
+
 CREATE TABLE IF NOT EXISTS usage_logs (
   id TEXT PRIMARY KEY,
   token_id TEXT,
@@ -69,7 +71,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 );
 
 CREATE INDEX IF NOT EXISTS usage_logs_created_at ON usage_logs(created_at);
-CREATE INDEX IF NOT EXISTS usage_logs_channel_id ON usage_logs(channel_id);
+CREATE INDEX IF NOT EXISTS usage_logs_token_created ON usage_logs(token_id, created_at);
+CREATE INDEX IF NOT EXISTS usage_logs_channel_created ON usage_logs(channel_id, created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -83,6 +86,8 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS admin_sessions_token_hash ON admin_sessions(token_hash);
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,

@@ -462,6 +462,7 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 				: 0;
 			await recordUsage(c.env.DB, {
 				tokenId: tokenRecord.id,
+				userId: tokenRecord.user_id,
 				channelId: channelForUsage.id,
 				model: effectiveModel,
 				requestPath,
@@ -479,15 +480,6 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 				errorCode,
 				errorMessage,
 			});
-			// Deduct user balance
-			if (cost > 0 && tokenRecord.user_id) {
-				const now = new Date().toISOString();
-				await c.env.DB.prepare(
-					"UPDATE users SET balance = balance - ?, updated_at = ? WHERE id = ?",
-				)
-					.bind(cost, now, tokenRecord.user_id)
-					.run();
-			}
 		};
 
 		const headerUsage = parseUsageFromHeaders(lastResponse.headers);

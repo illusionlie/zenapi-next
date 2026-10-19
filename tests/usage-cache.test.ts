@@ -295,6 +295,7 @@ describe("recordUsage - persists cache columns", () => {
 		const db = {
 			prepare(sql: string) {
 				const stmt = {
+					sql,
 					boundArgs: [] as unknown[],
 					bind: (...args: unknown[]) => {
 						stmt.boundArgs = args;
@@ -306,6 +307,12 @@ describe("recordUsage - persists cache columns", () => {
 					},
 				};
 				return stmt;
+			},
+			// recordUsage settles via db.batch; forward each statement's sql/args
+			// into the same `runs` log so the original assertions stay valid.
+			batch: async (stmts: Array<{ sql: string; boundArgs: unknown[] }>) => {
+				for (const s of stmts) runs.push({ sql: s.sql, args: s.boundArgs });
+				return stmts.map(() => ({}));
 			},
 		};
 		return { db: db as unknown as D1Database, runs };
