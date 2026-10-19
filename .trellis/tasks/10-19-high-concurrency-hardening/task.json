@@ -1,0 +1,31 @@
+{
+	"id": "high-concurrency-hardening",
+	"name": "high-concurrency-hardening",
+	"title": "高并发加固",
+	"description": "",
+	"status": "planning",
+	"dev_type": null,
+	"scope": null,
+	"package": null,
+	"priority": "P2",
+	"creator": "illusionlie",
+	"assignee": "illusionlie",
+	"createdAt": "2026-10-19",
+	"completedAt": null,
+	"branch": null,
+	"base_branch": "main",
+	"worktree_path": null,
+	"commit": null,
+	"pr_url": null,
+	"subtasks": [],
+	"children": [
+		"10-19-p0-index-billing",
+		"10-19-p1-hotpath-cache",
+		"10-19-p2-rollup-retention",
+		"10-19-p2-cooldown-log-trim"
+	],
+	"parent": null,
+	"relatedFiles": [],
+	"notes": "",
+	"meta": {}
+}

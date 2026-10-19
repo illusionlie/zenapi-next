@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引：routes 薄壳 + services 下沉、挂载点约定"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "D1 迁移与 schema.sql 同步、幂等性分层；新增 0025 迁移必读"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "recordUsage 19 列 INSERT 与 NULL 直通契约；batch 化不得破坏 usage 口径与 tests/usage-cache.test.ts 锚点"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "console.* 前缀标签惯例；batch 失败日志按此写"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁 check/typecheck/test、Biome 规则、命名禁则"}

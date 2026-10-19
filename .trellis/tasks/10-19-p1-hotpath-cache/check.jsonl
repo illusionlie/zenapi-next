@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "检查基线：门禁命令与禁则"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "校验三级回退链与 clamp 语义零回归（缓存只包 DB 读）"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "校验缓存后路由矩阵行为不变（api_formats 资格判定与目标格式选择）"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "校验异步化后 usage 记录与计费链路契约保持"}

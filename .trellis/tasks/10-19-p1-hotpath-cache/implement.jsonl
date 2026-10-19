@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引：routes 薄壳 + services 下沉"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "settings 三级回退链（settings→env→默认）与 clamp 契约；缓存包装不得破坏语义"}
+{"file": ".trellis/spec/api-worker/backend/proxy-headers.md", "reason": "头策略 settings 链路与 applyHeaderPolicy 接线点；缓存包装位置依据"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "渠道候选与 selectTargetFormat 路由矩阵；渠道列表缓存不得改变资格判定与目标格式选择"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "waitUntil 化后 usage 记录/计费链路契约（recordUsage batch）须保持"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁 check/typecheck/test、Biome 规则、命名禁则"}
