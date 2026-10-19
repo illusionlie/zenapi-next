@@ -861,6 +861,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 				totalTokens: 0,
 				promptTokens: 0,
 				completionTokens: 0,
+				cachedInputTokens: null,
+				cacheCreationTokens: null,
 			};
 			const cost = price
 				? calculateCost(
@@ -880,6 +882,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 				totalTokens: normalized.totalTokens,
 				promptTokens: normalized.promptTokens,
 				completionTokens: normalized.completionTokens,
+				cachedInputTokens: normalized.cachedInputTokens,
+				cacheCreationTokens: normalized.cacheCreationTokens,
 				cost,
 				latencyMs,
 				firstTokenLatencyMs: resolvedFirstTokenLatencyMs,

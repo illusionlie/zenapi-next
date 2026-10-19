@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   total_tokens INTEGER,
   prompt_tokens INTEGER,
   completion_tokens INTEGER,
+  cached_input_tokens INTEGER,
+  cache_creation_tokens INTEGER,
   cost REAL,
   latency_ms INTEGER,
   first_token_latency_ms INTEGER,
