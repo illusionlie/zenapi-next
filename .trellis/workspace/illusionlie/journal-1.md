@@ -566,3 +566,25 @@ usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 00
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: P1 热路径缓存与写入异步化
+
+**Date**: 2026-10-19
+**Task**: P1：热路径缓存与写入异步化（高并发加固树 2/4）
+**Branch**: `main`
+
+### Summary
+
+新增 utils/cache.ts（TTL 原语，渠道/别名 10s、代理 settings 30s，WeakMap 注册表 + max 触顶清空）与 utils/post-response.ts（waitUntil 助手，executionCtx 缺失降级）；tokenAuth 合一为 tokens LEFT JOIN users 单查（显式列 + user_* 别名，三态与基线逐分支等价）；双代理路径鉴权后 4 读并单个 Promise.all，冷读 5 / 热读 1；非流式与错误路径 usage 写入切 post-response 不阻塞返回；顺带修复 anthropic-proxy 流式 executionCtx 裸断言存量 bug。新增 31 用例共 518 全绿，既有测试零改动。实施分两段（前代理超时遗留 + 续做审计补齐），check 独立复核修正 verification.md 计数笔误（487+31）。dev server 运行时手验 deferred to user（沙箱禁长驻进程），手验步骤在任务 verification.md §6。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `50f4ad6` | (see git log) |
+| `72a8f11` | (see git log) |
+
+### Status
+
+[OK] **Completed**
