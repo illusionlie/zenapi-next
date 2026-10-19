@@ -543,3 +543,26 @@ usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 00
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: P0 索引补齐与计费原子性
+
+**Date**: 2026-10-19
+**Task**: P0：索引补齐与计费原子性（高并发加固树 1/4）
+**Branch**: `main`
+
+### Summary
+
+迁移 0025 补 4 索引（tokens_key_hash / admin_sessions_token_hash / usage_logs_token_created / usage_logs_channel_created）并 DROP 冗余单列 usage_logs_channel_id——EXPLAIN 三条热查询全部 SEARCH…USING INDEX，鉴权全表扫描成为历史。recordUsage 改单次 db.batch（INSERT + quota + balance 单事务），余额扣减 `MAX(0, balance - cost)` 钳制不为负（用户 2026-10-19 决策），失败 `console.error("[usage] …")` 不 rethrow；proxy / anthropic-proxy 调用点收缩为只算 cost 传 userId。新增 usage-billing 6 用例，487 全绿；batch 原子性经内存 D1 UNIQUE 冲突回滚实测。三项偏离（userId TEXT、cost 复用、错误路径单语句 batch）均经 check 认可。spec：usage-accounting §8 计费契约、AGENTS §8 计费原子性 bullet、logging-guidelines 收尾失败例外。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `62f97e5` | (see git log) |
+| `1f94be9` | (see git log) |
+| `a4d0047` | (see git log) |
+
+### Status
+
+[OK] **Completed**
