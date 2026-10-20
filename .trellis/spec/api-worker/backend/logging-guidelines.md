@@ -14,9 +14,9 @@ Worker 端**没有日志库**，统一使用 `console.*`（Cloudflare Workers �
 
 ### Convention: 全局请求日志由 index.ts 中间件负责
 
-**What**: `index.ts` 有两个全局日志中间件：`hono/logger`（`app.use("*", logger())`）输出标准请求行；自定义中间件输出 `console.log("[request]", { method, path, content_type, body_type, body_keys, body_size })`（带 body 时）或 `console.log("[request]", { method, path })`（无 body 时）。
+**What**: `index.ts` 有两个全局日志中间件：`hono/logger`（`app.use("*", logger())`）输出标准请求行；自定义中间件**两态**（2026-10-19 P2 起）：默认 `console.log("[request]", { method, path })`，**不 clone 不解析请求体**；settings `debug_request_body_log=true`（30s TTL 缓存读取，加载失败降级 false）时恢复完整形态 `console.log("[request]", { method, path, content_type, body_type, body_keys, body_size })`。
 
-**Why**: 请求侧可观测性集中在入口，路由文件内零请求日志。新路由**不需要**自己打请求日志。
+**Why**: 请求侧可观测性集中在入口，路由文件内零请求日志。新路由**不需要**自己打请求日志。body 解析默认关闭：每请求 clone + 全量 json() 是纯 CPU/内存税（长对话体数百 KB、双重解析），开启仅用于调试期。
 
 ### Convention: 业务日志用方括号前缀 + 对象载荷
 

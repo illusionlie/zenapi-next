@@ -43,6 +43,7 @@ export async function setProxyRetryRounds(db: D1Database, rounds: number): Promi
   避免用户点保存时把 env 值意外固化进 settings。
 - **内置默认值必须对齐 wrangler.toml 的实际部署值**，不要照抄旧代码里的兜底字面量。
 - **代理 settings 热路径读取走 30s TTL 缓存**（2026-10-19 P1）：`loadProxySettingsCached` 只缓存 settings 表的 raw map（一条 `key IN` 查询）；`resolveProxyRetryConfig` 等纯解析与三级回退链**每次照常执行**——缓存层永不改变回退/clamp 语义（既有 settings 测试零改动通过即此保证）。管理台表单真相路径（`loadProxyRetryConfig(db)` 直读）**不走缓存**。生效陈旧窗口 ≤30s。
+- **布尔型键变体**（`debug_request_body_log`，2026-10-19 P2）：读侧三级回退同链（settings → env `DEBUG_REQUEST_BODY_LOG` → 默认 false），但存储值语义为「显式 `"true"`/`"false"` 压过 env，其余脏值降级 env」（读宽写严的读侧体现）；GET 不带 env 回退（表单即真相）；PUT 严格布尔校验，非法 400 `invalid_debug_request_body_log`。热路径读取走 30s TTL 缓存（`loadDebugLogFlag`）。
 
 ### 4. Validation & Error Matrix
 
