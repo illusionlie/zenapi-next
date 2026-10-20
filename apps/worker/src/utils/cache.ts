@@ -10,6 +10,8 @@ export const CHANNEL_CACHE_TTL_MS = 10_000;
 export const ALIAS_CACHE_TTL_MS = 10_000;
 /** Proxy runtime settings snapshot (services/settings.ts loadProxySettingsCached). */
 export const PROXY_SETTINGS_CACHE_TTL_MS = 30_000;
+/** Debug request body log flag (services/settings.ts loadDebugLogFlag). */
+export const DEBUG_LOG_FLAG_CACHE_TTL_MS = 30_000;
 
 export type TtlCache<T> = {
 	get(key: string): T | undefined;

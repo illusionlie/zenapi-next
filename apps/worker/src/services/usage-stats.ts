@@ -169,7 +169,9 @@ export async function rollupDate(db: D1Database, date: UtcDate): Promise<void> {
 	}
 	await db.batch([
 		db.prepare("DELETE FROM usage_stats_daily WHERE stat_date = ?").bind(date),
-		db.prepare(ROLLUP_INSERT_SQL).bind(date, dayStart, `${addUtcDays(date, 1)}T00:00:00.000Z`),
+		db
+			.prepare(ROLLUP_INSERT_SQL)
+			.bind(date, dayStart, `${addUtcDays(date, 1)}T00:00:00.000Z`),
 	]);
 }
 

@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { type TokenRecord, tokenAuth } from "../middleware/tokenAuth";
+import {
+	filterCoolingChannels,
+	recordChannelFailure,
+	recordChannelSuccess,
+} from "../services/channel-cooldown";
 import { extractModelIds } from "../services/channel-models";
 import { resolveChannelRoute } from "../services/channel-route";
 import {
@@ -715,6 +720,16 @@ proxy.all("/*", tokenAuth, async (c) => {
 		}
 	}
 
+	// Channel cooldown (P2): drop cooling-down channels from the candidate
+	// pool before weighted ordering — same eligibility tier as the routing
+	// matrix above, createWeightedOrder stays a pure function. fail-open is
+	// built into filterCoolingChannels: when every candidate is cooling the
+	// full pool is kept, so cooldown never causes an early no_available_channels.
+	const nonCoolingIds = new Set(
+		filterCoolingChannels(candidates.map((ch) => ch.id)),
+	);
+	candidates = candidates.filter((ch) => nonCoolingIds.has(ch.id));
+
 	const ordered = createWeightedOrder(candidates);
 	const querySuffix = c.req.url.includes("?")
 		? `?${c.req.url.split("?")[1]}`
@@ -725,6 +740,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 	const start = Date.now();
 	let selectedChannel: ChannelRecord | null = null;
 	let selectedModelName: string | null = effectiveModel;
+	// Channel cooldown (P2): at most one failure record per channel per
+	// request, so multi-round retries cannot black-hole a channel alone.
+	const cooldownFailureRecorded = new Set<string>();
 
 	let round = 0;
 	while (round < retryRounds && !selectedChannel) {
@@ -733,6 +751,10 @@ proxy.all("/*", tokenAuth, async (c) => {
 			lastChannel = channel;
 			const keys = shuffleArray(parseApiKeys(channel.api_key));
 			let channelRetryable = false;
+			// Last attempt outcome for this channel — drives the cooldown
+			// accounting at the abandonment point below (design.md §判定语义).
+			let channelLastResponse: Response | null = null;
+			let channelLastAttemptThrew = false;
 
 			// Determine the model name this channel actually supports
 			// and prepare a channel-specific request body if needed
@@ -769,14 +791,22 @@ proxy.all("/*", tokenAuth, async (c) => {
 					channel.disguise_system_prompt ?? null,
 				);
 
+				// Per-attempt response for the cooldown accounting: a fetch throw
+				// and a post-response conversion throw must not be conflated —
+				// any received HTTP response proves the upstream alive (design's
+				// success rule applies "无论后续是否解析失败").
+				let attemptResponse: Response | null = null;
 				try {
 					const response = await fetch(target, {
 						method: c.req.method,
 						headers,
 						body: channelBody,
 					});
+					attemptResponse = response;
 
 					lastResponse = response;
+					channelLastResponse = response;
+					channelLastAttemptThrew = false;
 					if (response.ok) {
 						// Convert response based on the channel's target format
 						lastResponse = await convertResponse(
@@ -798,12 +828,43 @@ proxy.all("/*", tokenAuth, async (c) => {
 					}
 				} catch {
 					lastResponse = null;
+					if (attemptResponse === null) {
+						// fetch itself threw (network error): no HTTP response was
+						// received on this attempt — the accounting must reflect that
+						channelLastResponse = null;
+						channelLastAttemptThrew = true;
+					}
+					// else: a response arrived but downstream conversion/parse
+					// failed — channelLastResponse keeps it as alive-proof
 					channelRetryable = true;
 				}
 			}
 
 			if (selectedChannel) {
+				// Any ok response proves the upstream alive — clears its failure
+				// streak immediately (recovered channels serve again without
+				// waiting out the cooldown window).
+				recordChannelSuccess(channel.id);
 				break;
+			}
+			// Channel abandoned for this request (P2 cooldown accounting): the
+			// last attempt decides — a network error (fetch threw, no response)
+			// or a retryable status (408/429/5xx) records one failure per channel
+			// per request (the set guard keeps multi-round retries from stacking,
+			// never from flipping a failure into a success); any other received
+			// HTTP response (non-retryable 4xx, or an ok response whose
+			// conversion failed) proves the upstream alive and clears the streak.
+			const lastFailedRetryably =
+				channelLastAttemptThrew ||
+				(channelLastResponse !== null &&
+					isRetryableStatus(channelLastResponse.status));
+			if (lastFailedRetryably) {
+				if (!cooldownFailureRecorded.has(channel.id)) {
+					cooldownFailureRecorded.add(channel.id);
+					recordChannelFailure(channel.id);
+				}
+			} else if (channelLastResponse !== null) {
+				recordChannelSuccess(channel.id);
 			}
 			if (channelRetryable) {
 				shouldRetry = true;

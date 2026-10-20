@@ -18,6 +18,7 @@ import {
 	getSessionTtlHours,
 	getTurnstileConfig,
 	isAdminPasswordSet,
+	loadDebugLogFlag,
 	loadProxyRetryConfig,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
@@ -27,6 +28,7 @@ import {
 	setAdminPasswordHash,
 	setAnnouncement,
 	setCheckinReward,
+	setDebugRequestBodyLog,
 	setDefaultBalance,
 	setLdcEpayGateway,
 	setLdcEpayKey,
@@ -74,6 +76,9 @@ settings.get("/", async (c) => {
 	const modelTestPrompt = await getModelTestPrompt(c.env.DB);
 	const proxyRetryConfig = await loadProxyRetryConfig(c.env.DB);
 	const turnstileConfig = await getTurnstileConfig(c.env.DB);
+	// 不带 env 回退（与 loadProxyRetryConfig(db) 同一 GET 契约）：表单即真相，
+	// 不透显 env 值，避免保存时把 env 值意外固化进 settings
+	const debugRequestBodyLog = await loadDebugLogFlag(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -93,6 +98,7 @@ settings.get("/", async (c) => {
 		proxy_retry_rounds: proxyRetryConfig.rounds,
 		proxy_retry_delay_ms: proxyRetryConfig.delayMs,
 		model_test_prompt: modelTestPrompt,
+		debug_request_body_log: debugRequestBodyLog,
 		// secret 永不回显，只返回已设置布尔（先例：admin_password_hash）
 		turnstile_enabled: turnstileConfig.enabled,
 		turnstile_site_key: turnstileConfig.siteKey,
@@ -296,6 +302,28 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setProxyRetryDelayMs(c.env.DB, delayMs);
+		touched = true;
+	}
+
+	// Debug request body log（P2）：写侧严格布尔 —— 仅接受 true/false（布尔或
+	// "true"/"false" 字符串）；0/1、"yes" 等一切其他值拒绝（400），防止真值
+	// 强制转换悄悄打开全量请求体日志
+	if (body.debug_request_body_log !== undefined) {
+		const value = body.debug_request_body_log;
+		if (
+			value !== true &&
+			value !== false &&
+			value !== "true" &&
+			value !== "false"
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_debug_request_body_log",
+				"invalid_debug_request_body_log",
+			);
+		}
+		await setDebugRequestBodyLog(c.env.DB, value === true || value === "true");
 		touched = true;
 	}
 

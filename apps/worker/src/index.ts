@@ -24,6 +24,7 @@ import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
 import userApiRoutes from "./routes/user-api";
 import userAuthRoutes from "./routes/user-auth";
+import { loadDebugLogFlag } from "./services/settings";
 import { runDailyMaintenance } from "./services/usage-stats";
 
 const app = new Hono<AppEnv>({ strict: false });
@@ -31,8 +32,24 @@ const app = new Hono<AppEnv>({ strict: false });
 app.use("*", async (c, next) => {
 	const method = c.req.method;
 	const path = c.req.path;
-	const contentType = c.req.header("content-type") ?? "";
+	// Debug request body logging is OFF by default (P2): the default path logs
+	// method/path only and never clones or parses the request body — no
+	// double-parse / double-residency tax on large payloads. The
+	// debug_request_body_log setting (or DEBUG_REQUEST_BODY_LOG env fallback)
+	// restores the legacy full form. Flag-load failure degrades to the cheap
+	// default (log less, never break the request).
+	let debugBodyLog = false;
 	if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+		try {
+			debugBodyLog = await loadDebugLogFlag(c.env.DB, {
+				debugRequestLog: c.env.DEBUG_REQUEST_BODY_LOG,
+			});
+		} catch {
+			debugBodyLog = false;
+		}
+	}
+	if (debugBodyLog) {
+		const contentType = c.req.header("content-type") ?? "";
 		const raw = c.req.raw.clone();
 		let bodyType = "unknown";
 		let bodyKeys: string[] = [];

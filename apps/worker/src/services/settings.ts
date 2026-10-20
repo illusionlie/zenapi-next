@@ -1,5 +1,6 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import {
+	DEBUG_LOG_FLAG_CACHE_TTL_MS,
 	getTtlCache,
 	PROXY_SETTINGS_CACHE_TTL_MS,
 	type TtlCache,
@@ -648,4 +649,92 @@ export async function setTurnstileSecretKey(
 	secretKey: string,
 ): Promise<void> {
 	await upsertSetting(db, TURNSTILE_SECRET_KEY_KEY, secretKey);
+}
+
+// Debug request body log (index.ts [request] middleware two-state switch)
+
+export const DEBUG_REQUEST_BODY_LOG_KEY = "debug_request_body_log";
+
+/** Raw env-var fallback (`DEBUG_REQUEST_BODY_LOG`). */
+export type DebugLogEnvFallback = { debugRequestLog?: string };
+
+const debugLogFlagCaches = new WeakMap<D1Database, TtlCache<SettingsRawMap>>();
+
+/**
+ * Env truthiness ("1" / "true" / "yes", case-insensitive) — same convention
+ * as the TURNSTILE_DISABLED escape hatch (services/turnstile.ts).
+ */
+function isTruthyEnvFlag(value: string | undefined): boolean {
+	if (!value) {
+		return false;
+	}
+	const normalized = value.trim().toLowerCase();
+	return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+/**
+ * Pure resolver for the debug request body log flag, walking the standard
+ * three-level fallback chain (settings-config.md): a stored settings value
+ * wins when it parses as a strict boolean ("true"); a missing or dirty stored
+ * value falls through to the env truthy check; otherwise the built-in default
+ * false. Kept DB-free so callers reading through the cached snapshot get the
+ * exact same chain semantics, re-evaluated on every call.
+ */
+export function resolveDebugLogFlag(
+	raw: SettingsRawMap,
+	envFallback?: DebugLogEnvFallback,
+): boolean {
+	const stored = raw[DEBUG_REQUEST_BODY_LOG_KEY] ?? null;
+	if (stored === "true") {
+		return true;
+	}
+	if (stored === "false") {
+		return false;
+	}
+	// Missing or dirty stored value: keep walking the chain (env → default
+	// false), same read-wide degradation as the numeric settings resolvers.
+	return isTruthyEnvFlag(envFallback?.debugRequestLog);
+}
+
+/**
+ * Loads the debug request body log flag with the settings → env → false
+ * fallback chain, memoizing only the raw settings-table read per db binding
+ * for DEBUG_LOG_FLAG_CACHE_TTL_MS (same cached-raw + pure-parse split as
+ * loadProxySettingsCached — the middleware runs on every request before any
+ * route, so the flag read must not add a per-request D1 round trip). The
+ * management PUT becomes visible within the TTL window (documented staleness
+ * bound, AGENTS §8).
+ */
+export async function loadDebugLogFlag(
+	db: D1Database,
+	envFallback?: DebugLogEnvFallback,
+): Promise<boolean> {
+	const cache = getTtlCache(
+		debugLogFlagCaches,
+		db,
+		DEBUG_LOG_FLAG_CACHE_TTL_MS,
+	);
+	const hit = cache.get(DEBUG_REQUEST_BODY_LOG_KEY);
+	let raw: SettingsRawMap;
+	if (hit !== undefined) {
+		raw = hit;
+	} else {
+		raw = await readSettingsRawMap(db, [DEBUG_REQUEST_BODY_LOG_KEY]);
+		cache.set(DEBUG_REQUEST_BODY_LOG_KEY, raw);
+	}
+	return resolveDebugLogFlag(raw, envFallback);
+}
+
+/**
+ * Updates the debug request body log flag (stored strictly as "true"/"false").
+ */
+export async function setDebugRequestBodyLog(
+	db: D1Database,
+	enabled: boolean,
+): Promise<void> {
+	await upsertSetting(
+		db,
+		DEBUG_REQUEST_BODY_LOG_KEY,
+		enabled ? "true" : "false",
+	);
 }
