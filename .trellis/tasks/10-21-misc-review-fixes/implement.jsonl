@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "settings 读取的三级回退与缓存惯例——F2 区分管理台读与热路径读"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "请求日志形态约定（F1 改解析路径不改日志形态）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "门禁命令与禁则"}
+{"file": ".trellis/tasks/10-21-misc-review-fixes/prd.md", "reason": "三个修复的需求、缺陷证据与逐项验收"}

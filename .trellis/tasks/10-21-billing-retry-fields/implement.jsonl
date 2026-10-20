@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "§8 计费 batch 原子性契约——重试不得改变原子性/钳制/条件省略语义"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "失败日志形态约定（[tag] 前缀 + 平面载荷）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "门禁命令与禁则"}
+{"file": ".trellis/tasks/10-21-billing-retry-fields/prd.md", "reason": "需求与验收标准"}
+{"file": ".trellis/tasks/10-21-billing-retry-fields/implement.md", "reason": "执行清单与可测性注入设计"}

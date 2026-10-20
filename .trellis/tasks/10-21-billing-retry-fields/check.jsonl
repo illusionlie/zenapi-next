@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "检查基线"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "校验 batch 原子性、钳制、条件省略零回归"}
+{"file": ".trellis/tasks/10-21-billing-retry-fields/prd.md", "reason": "验收标准清单"}

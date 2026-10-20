@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 后端规范索引"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "§9 预聚合与保留契约（rollup/retention/防丢守卫）——本任务改 cron 链行为，需对齐既有契约语义"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "D1 语句形态与幂等分层约定"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "usage_retention_days 三级回退链读取惯例（getRetentionDays 不动）"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "scheduled 内失败日志形态（[tag] 前缀 + 平面载荷）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "门禁命令与禁则"}
+{"file": ".trellis/tasks/10-21-retention-fuse-backfill/prd.md", "reason": "需求、缺陷证据与验收标准"}
+{"file": ".trellis/tasks/10-21-retention-fuse-backfill/design.md", "reason": "API 形态、查询预算表、cutoff helper、测试设计"}

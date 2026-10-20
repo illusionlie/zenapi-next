@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "检查基线：门禁命令与禁则"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "校验防丢守卫与幂等语义未被破坏（评审确认正确的点不许顺手重构）"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "prune 端点响应形态与错误码惯例"}
+{"file": ".trellis/tasks/10-21-retention-fuse-backfill/prd.md", "reason": "验收标准清单（含查询预算核算）"}
+{"file": ".trellis/tasks/10-21-retention-fuse-backfill/design.md", "reason": "预算表与 API 形态——check 按此复核"}

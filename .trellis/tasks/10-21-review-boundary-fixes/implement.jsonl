@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "父任务 finish 阶段需同步的 §8 计费 / §9 预聚合契约原文"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "F2/F3 涉及的 settings 键与读取惯例描述核对"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "debug 请求日志两态描述核对"}
+{"file": ".trellis/tasks/10-21-review-boundary-fixes/prd.md", "reason": "跨子任务验收与 finish 清单"}
