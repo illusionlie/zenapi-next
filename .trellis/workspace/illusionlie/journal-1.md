@@ -610,3 +610,25 @@ usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 00
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: P2 渠道冷却与请求日志减负 + 高并发加固树集成收尾
+
+**Date**: 2026-10-20
+**Task**: P2：渠道冷却与请求日志减负（高并发加固树 4/4）+ 父任务集成审查
+**Branch**: `main`
+
+### Summary
+
+新增 services/channel-cooldown.ts（3 连败 60s 冷却，now 注入，fail-open 内建：全冷返回全量永不提前 503）；双代理接线（成功 = 任何存活证明响应即清零；失败 = 渠道放弃点每渠道每请求至多记 1 次）；候选装配在路由矩阵后、加权排序前过滤。入口请求日志默认零解析（raw.clone 零调用，[request] 仅 method/path），settings `debug_request_body_log` 三级回退 + 30s 缓存，PUT 严格布尔校验。实施分三段（被取消的前代理 + 续做审计 + check 修复）：续做修复接线双 bug（多轮重试误清失败记录、响应后解析抛错误记网络失败）；check 抓获 P0——惰性过期误清未达阈的失败计数致冷却在接线路径完全不生效（此前 575 全绿是权重随机的幸运样本），修复后确定性单测锚定、集成测试 8/8 可复现，576 全绿。父任务集成审查：四子任务全部独立 check 通过，AGENTS/spec 逐任务增量更新一致，跨子任务账目（索引/计费/读数/cron/冷却）逐项核对通过；运行时手验与数十万行基准压测 deferred to user（步骤在各 verification.md）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f248493` | (see git log) |
+| `d568ddc` | (see git log) |
+
+### Status
+
+[OK] **Completed**
