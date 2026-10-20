@@ -13,6 +13,7 @@ import {
 	loadModelUsageTotals,
 	loadUserDailyUsage,
 	loadUserUsageTotals,
+	loadWindowTotals,
 	pruneExpiredSessions,
 	pruneRollup,
 	pruneUsageLogsBatched,
@@ -247,6 +248,96 @@ describe("splitWindow", () => {
 		const split = splitWindow("2026-10-19", "2026-10-19", now);
 		expect(split.rollupFrom).toBeNull();
 		expect(split.rawFrom).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// splitWindow sub-day short-circuit (span ≤ 1 day → raw-only, exact bounds)
+// ---------------------------------------------------------------------------
+
+describe("splitWindow sub-day short-circuit", () => {
+	// Monitoring call shape: since = toISOString().slice(0, 19) of the
+	// lookback start (floored to seconds, no Z) while `now` keeps its
+	// milliseconds — exactly what routes/monitoring.ts and user-api.ts pass.
+	const rollingSince = (now: Date, ms: number): string =>
+		new Date(now.getTime() - ms).toISOString().slice(0, 19);
+
+	it("serves a rolling 24h window from raw alone even when it starts yesterday", () => {
+		// 23:00 UTC: the 24h window spans yesterday entirely — the old
+		// whole-day approximation reported ~47h here (~2x inflation).
+		const now = new Date("2026-10-19T23:00:00.750Z");
+		const since = rollingSince(now, 86_400_000); // "2026-10-18T23:00:00"
+		const split = splitWindow(since, null, now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rollupTo).toBe("");
+		expect(split.rawFrom).toBe(since);
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("serves the 24h window from raw alone right after UTC midnight too", () => {
+		const now = new Date("2026-10-20T00:30:00.000Z");
+		const since = rollingSince(now, 86_400_000); // "2026-10-19T00:30:00"
+		const split = splitWindow(since, null, now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rawFrom).toBe(since);
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("serves a 15m window crossing UTC midnight from raw alone", () => {
+		const now = new Date("2026-10-20T00:07:00.000Z");
+		const since = rollingSince(now, 15 * 60_000); // "2026-10-19T23:52:00"
+		const split = splitWindow(since, null, now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rawFrom).toBe(since);
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("serves a historical same-day sub-day window from raw alone with exact bounds", () => {
+		const split = splitWindow(
+			"2026-10-15T10:00:00",
+			"2026-10-15T11:00:00",
+			new Date("2026-10-19T08:15:00.000Z"),
+		);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rollupTo).toBe("");
+		expect(split.rawFrom).toBe("2026-10-15T10:00:00");
+		expect(split.rawTo).toBe("2026-10-15T11:00:00");
+	});
+
+	it("keeps the rollup path for a 7d rolling window (regression anchor)", () => {
+		const now = new Date("2026-10-19T08:15:30.500Z");
+		const since = rollingSince(now, 7 * 86_400_000); // "2026-10-12T08:15:30"
+		const split = splitWindow(since, null, now);
+		expect(split.rollupFrom).toBe("2026-10-12");
+		expect(split.rollupTo).toBe("2026-10-18");
+		expect(split.rawFrom).toBe("2026-10-19T00:00:00.000Z");
+		expect(split.rawTo).toBeNull();
+	});
+
+	it("reads truncated no-Z inputs as UTC, not host-local time (east-host probe)", () => {
+		// Parsed as local time east of UTC, `from` would land earlier and the
+		// span would exceed a day → rollup path. The exact-24h span also pins
+		// the second-granularity `<=` rule (raw ms delta here is DAY_MS+750).
+		const now = new Date("2026-10-19T09:15:00.750Z");
+		const split = splitWindow("2026-10-18T09:15:00", null, now);
+		expect(split.rollupFrom).toBeNull();
+		expect(split.rawFrom).toBe("2026-10-18T09:15:00");
+	});
+
+	it("reads truncated no-Z inputs as UTC, not host-local time (west-host probe)", () => {
+		// Parsed as local time west of UTC, `from` would land later and this
+		// 25h window would shrink under a day → wrongly raw-only.
+		const now = new Date("2026-10-19T10:20:00.000Z");
+		const split = splitWindow("2026-10-18T09:15:00", null, now);
+		expect(split.rollupFrom).toBe("2026-10-18");
+		expect(split.rawFrom).toBe("2026-10-19T00:00:00.000Z");
+	});
+
+	it("does not short-circuit when from is absent (unbounded window)", () => {
+		const split = splitWindow(null, null, new Date("2026-10-19T08:15:00.000Z"));
+		expect(split.rollupFrom).toBe("");
+		expect(split.rollupTo).toBe("2026-10-18");
+		expect(split.rawFrom).toBe("2026-10-19T00:00:00.000Z");
 	});
 });
 
@@ -522,6 +613,149 @@ describe("rollup + raw union consistency", () => {
 		const rows = await loadModelUsageTotals(makeD1(sqlite), split);
 		return new Map(rows.map((r) => [r.model, r]));
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Sub-day equivalence: the split assembly must equal the raw-only precise
+// query on a fixed dataset (rolled-up boundary day present, so a wrongly
+// rollup-including assembly would inflate every number).
+// ---------------------------------------------------------------------------
+
+describe("sub-day window equivalence (split == raw-only)", () => {
+	it("24h rolling window totals equal the raw-only precise query", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		insertToken(sqlite, "t1", "u1");
+		insertChannel(sqlite, "c1", "Chan");
+		// Fixed dataset: yesterday rows (one before the window start, two
+		// inside), today rows inside. Yesterday is rolled up.
+		const rows = [
+			{ at: "2026-10-18T10:00:00.000Z", tokens: 111, latency: 10, status: "ok" },
+			{ at: "2026-10-18T23:30:00.000Z", tokens: 100, latency: 120, status: "ok" },
+			{ at: "2026-10-18T23:59:59.999Z", tokens: 50, latency: 80, status: "error" },
+			{ at: "2026-10-19T00:00:00.000Z", tokens: 60, latency: 100, status: "ok" },
+			{ at: "2026-10-19T12:00:00.000Z", tokens: 70, latency: 30, status: "ok" },
+		] as const;
+		for (const r of rows) {
+			insertLog(sqlite, {
+				token_id: "t1",
+				channel_id: "c1",
+				model: "m1",
+				total_tokens: r.tokens,
+				prompt_tokens: r.tokens,
+				latency_ms: r.latency,
+				status: r.status,
+				created_at: r.at,
+			});
+		}
+		await rollupDate(db, "2026-10-18");
+
+		const now = new Date("2026-10-19T22:00:00.000Z");
+		const since = new Date(now.getTime() - 86_400_000)
+			.toISOString()
+			.slice(0, 19); // "2026-10-18T22:00:00"
+		const split = splitWindow(since, null, now);
+		expect(split.rollupFrom).toBeNull(); // guard: must be the raw-only shape
+
+		const totals = await loadWindowTotals(db, split);
+		const direct = sqlite
+			.prepare(
+				`SELECT COUNT(*) AS total_requests,
+				COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS total_errors,
+				COALESCE(SUM(latency_ms), 0) AS latency_sum
+				FROM usage_logs WHERE created_at >= ? AND created_at <= ?`,
+			)
+			.get(since, now.toISOString()) as Record<string, number>;
+		expect(totals.total_requests).toBe(Number(direct.total_requests));
+		expect(totals.total_errors).toBe(Number(direct.total_errors));
+		expect(totals.latency_sum).toBe(Number(direct.latency_sum));
+		// Deterministic anchors: the pre-window row (10:00) is excluded, the
+		// rolled-up yesterday does NOT leak in → 4 requests, 1 error, 330 ms.
+		expect(totals).toEqual({
+			total_requests: 4,
+			total_errors: 1,
+			latency_sum: 330,
+		});
+	});
+
+	it("historical sub-day window summary equals the raw-only precise query", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		insertToken(sqlite, "t1", "u1");
+		insertChannel(sqlite, "c1", "Chan");
+		// One-hour window [10:00:00, 11:00:00) on 2026-10-15 (truncated upper
+		// bound compares by prefix, so the 11:00:00.000 row falls outside).
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 111,
+			prompt_tokens: 111,
+			created_at: "2026-10-15T09:59:59.999Z",
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 100,
+			prompt_tokens: 100,
+			cached_input_tokens: 40,
+			created_at: "2026-10-15T10:00:00.000Z",
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 50,
+			prompt_tokens: 50,
+			created_at: "2026-10-15T10:30:00.000Z",
+		});
+		insertLog(sqlite, {
+			token_id: "t1",
+			channel_id: "c1",
+			model: "m1",
+			total_tokens: 999,
+			prompt_tokens: 999,
+			created_at: "2026-10-15T11:00:00.000Z",
+		});
+		await rollupDate(db, "2026-10-15");
+
+		const split = splitWindow(
+			"2026-10-15T10:00:00",
+			"2026-10-15T11:00:00",
+			new Date("2026-10-19T08:15:00.000Z"),
+		);
+		expect(split.rollupFrom).toBeNull();
+
+		const summary = await loadDashboardSummary(db, split);
+		const direct = sqlite
+			.prepare(
+				`SELECT COUNT(*) AS total_requests,
+				COALESCE(SUM(total_tokens), 0) AS total_tokens,
+				COALESCE(SUM(cached_input_tokens), 0) AS cached_tokens,
+				COALESCE(SUM(CASE WHEN cached_input_tokens IS NOT NULL THEN prompt_tokens ELSE 0 END), 0) AS cache_prompt_base
+				FROM usage_logs WHERE created_at >= ? AND created_at <= ?`,
+			)
+			.get("2026-10-15T10:00:00", "2026-10-15T11:00:00") as Record<
+			string,
+			number
+		>;
+		expect(summary.total_requests).toBe(Number(direct.total_requests));
+		expect(summary.total_tokens).toBe(Number(direct.total_tokens));
+		expect(summary.cached_tokens).toBe(Number(direct.cached_tokens));
+		expect(summary.cache_prompt_base).toBe(Number(direct.cache_prompt_base));
+		// Anchors: only the 10:00 and 10:30 rows qualify; the whole-day rollup
+		// of 2026-10-15 (4 requests) must not leak into the one-hour window.
+		expect(summary).toEqual({
+			total_requests: 2,
+			total_tokens: 150,
+			latency_sum: 0,
+			total_errors: 0,
+			cached_tokens: 40,
+			cache_creation_tokens: 0,
+			cache_prompt_base: 100,
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

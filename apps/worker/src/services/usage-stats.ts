@@ -40,7 +40,8 @@ export function addUtcDays(date: UtcDate, days: number): UtcDate {
 export type UsageWindowSplit = {
 	/**
 	 * Rollup segment lower bound, `stat_date >= ?` (inclusive). null = the
-	 * window starts today (or later) and the rollup table has nothing to offer.
+	 * window starts today (or later) or fits within a single UTC day — either
+	 * way the rollup table has nothing to offer.
 	 */
 	rollupFrom: UtcDate | null;
 	/** Rollup segment upper bound, `stat_date <= ?` (inclusive). */
@@ -57,15 +58,18 @@ export type UsageWindowSplit = {
 /**
  * Splits a usage window into a rollup segment (complete past days, served
  * from usage_stats_daily) and a raw segment (today's rows, served from
- * usage_logs). The threshold is the UTC day cut and nothing else: windows
- * starting at or after today's midnight go to raw alone; windows reaching
- * further back take complete days [date(from), yesterday] from the rollup
- * plus raw rows from today's midnight onward. When the window ends before
- * today there is no raw segment.
+ * usage_logs). Two thresholds decide the shape: windows starting at or after
+ * today's midnight go to raw alone, and so do windows whose effective span is
+ * at most one UTC day (exact boundaries — a rolling 15m/1h/24h window
+ * crossing the day cut must not eat the day-granularity approximation);
+ * anything reaching further back takes complete days [date(from), yesterday]
+ * from the rollup plus raw rows from today's midnight onward. When the window
+ * ends before today there is no raw segment.
  *
- * Boundary note (documented approximation): the day containing `from` is
- * counted at day granularity from the rollup, so a rolling window spanning
- * the day cut includes that boundary day in full.
+ * Boundary note (documented approximation, spans > 1 day only): the day
+ * containing `from` is counted at day granularity from the rollup, so a
+ * multi-day window spanning the day cut includes that boundary day in full
+ * (error ≤ 1/window-days).
  */
 export function splitWindow(
 	fromIso: string | null | undefined,
@@ -85,6 +89,28 @@ export function splitWindow(
 			rawTo: to === "" ? null : to,
 		};
 	}
+	// Sub-day windows must not eat the day-granularity approximation: the
+	// rollup only knows whole UTC days, so a rolling 15m/1h/24h window that
+	// crosses the day cut would otherwise count its boundary day in full (a
+	// 24h monitoring range would report up to ~47h of data). Span is judged
+	// at second granularity — monitoring-style callers floor `from` via
+	// toISOString().slice(0, 19) while `now` carries milliseconds, so the raw
+	// millisecond delta of a rolling 24h window is DAY_MS + <1s and a plain
+	// `<= DAY_MS` on the raw values would miss it.
+	const toMs = to === "" ? now.getTime() : parseUtcIsoMs(to);
+	const fromMs = parseUtcIsoMs(from);
+	if (
+		fromMs !== null &&
+		toMs !== null &&
+		Math.floor(toMs / 1000) - Math.floor(fromMs / 1000) <= DAY_MS / 1000
+	) {
+		return {
+			rollupFrom: null,
+			rollupTo: "",
+			rawFrom: from,
+			rawTo: to === "" ? null : to,
+		};
+	}
 	const yesterday = addUtcDays(todayUtc, -1);
 	const rollupFrom = from.slice(0, 10);
 	const rollupTo = to === "" ? yesterday : minDate(yesterday, to.slice(0, 10));
@@ -96,6 +122,26 @@ export function splitWindow(
 		rawFrom: hasRaw ? todayStart : null,
 		rawTo,
 	};
+}
+
+/**
+ * Parses the two timestamp shapes splitWindow receives — full toISOString()
+ * (`2026-10-20T03:17:00.000Z`) or its 19-char slice(0, 19) truncation without
+ * the Z suffix — into UTC epoch milliseconds. The truncated form must never
+ * reach bare Date.parse: a no-Z string is read in the host's local time zone.
+ * Returns null for anything else (date-only strings, garbage): the caller
+ * then keeps the legacy string-comparison path.
+ */
+function parseUtcIsoMs(s: string): number | null {
+	if (s.length === 19) {
+		const ms = Date.parse(`${s}Z`);
+		return Number.isNaN(ms) ? null : ms;
+	}
+	if (s.length >= 20 && /(?:Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+		const ms = Date.parse(s);
+		return Number.isNaN(ms) ? null : ms;
+	}
+	return null;
 }
 
 function minDate(a: UtcDate, b: UtcDate): UtcDate {
