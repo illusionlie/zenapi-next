@@ -25,11 +25,11 @@
 
 ## 跨子任务验收
 
-- [ ] 4 个子任务各自验收全过、`bun run check && bun run typecheck && bun run test` 全绿。
-- [ ] 子任务间无行为矛盾：splitwindow-subday 与 retention-fuse-backfill 都改 `services/usage-stats.ts`，顺序执行（先 1 后 2），后者兼容前者语义。
-- [ ] AGENTS.md §8 更新：预聚合条目（短窗口绕开 + 自愈补漏 + 保险丝）、计费条目（重试 + 日志字段）、冷却条目（衰减语义）、`loadProxyRetryConfig` 描述漂移修正。
-- [ ] .trellis/spec/api-worker/backend/usage-accounting.md §8/§9 与新行为同步。
-- [ ] 评审确认「不用动」的点（isolate 冷却方向、TTL 缓存、03:17 时序设计、DELETE+INSERT 幂等）未被顺手重构。
+- [x] 4 个子任务各自验收全过、`bun run check && bun run typecheck && bun run test` 全绿。
+- [x] 子任务间无行为矛盾：splitwindow-subday 与 retention-fuse-backfill 都改 `services/usage-stats.ts`，顺序执行（先 1 后 2），后者兼容前者语义（check 零 hunk 命中 splitWindow 区块）。
+- [x] AGENTS.md §8 更新：预聚合条目（短窗口绕开 + 自愈补漏 + 保险丝）、计费条目（重试 + 日志字段）、冷却条目（衰减语义）、`loadProxyRetryConfig` 描述漂移修正。
+- [x] .trellis/spec/api-worker/backend/usage-accounting.md §8/§9 与新行为同步。
+- [x] 评审确认「不用动」的点（isolate 冷却方向、TTL 缓存、03:17 时序设计、DELETE+INSERT 幂等）未被顺手重构（4 个子任务的 check 越界扫描逐项确认）。
 
 ## Finish 清单（父任务收口）
 
