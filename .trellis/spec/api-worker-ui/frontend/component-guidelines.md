@@ -182,6 +182,29 @@ toast 出入场（350ms/250ms + `cubic-bezier(0.22,1,0.36,1)` + 16px rise + cros
 - 行为等价性靠样式补齐：Tailwind v4 preflight 已重置 button 的 border/padding/background，原 div 类名照搬即可视觉零差异（先例：MonitoringView 柱条 div→button）。
 - 模态背景点击关闭用 `absolute inset-0` 的 `<button>` + 内容层 `relative z-10`（先例：UsersView / App.tsx AnnouncementModal）——比 `e.target === e.currentTarget` 判断多出原生键盘可达性。
 
+### 可展开表格行：行级点击 + 行内真按钮的键盘双触发守卫（10-21-usage-log-detail-expand 沉淀）
+
+**Pattern**: 表格行展开详情（New API 风格）的标准结构——`Set<id>` state 管理多行独立展开、`pagedUsage.flatMap` 产出「数据行 + 条件详情行」扁平 `<tr>` 数组（显式 key，详情行 `${id}-detail`）、`columnCount` 常量供表头/空态/详情行 colSpan 三处同步引用（先例：UsageView）。
+
+> **Gotcha**: 可点击 `<tr>` 为满足 `useKeyWithClickEvents` 写了行级 `onKeyDown`（Enter/Space），行内展开按钮又是行内唯一可聚焦控件时：按钮聚焦按 Enter/Space，keydown 从按钮**冒泡到 tr** 触发第一次 toggle，浏览器随后在按钮上**合成 click** 再触发第二次 toggle——若按钮只对 click 做 `stopPropagation`，两次 toggle 相互抵消，**键盘用户完全无法展开**（鼠标路径正常，问题零表象）。
+
+**Fix**: 行级 `onKeyDown` 顶部加来源守卫早退，键盘激活完全交给按钮原生行为（按钮 click 已 stopPropagation 防行级双触发，恰好单次）：
+
+```tsx
+// Wrong：行级 keydown 不分来源 → 按钮键盘激活双触发净效果零
+<tr onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggle(); }}>
+
+// Correct：keydown 只在事件源就是行自身时生效
+<tr onClick={toggle} onKeyDown={(e) => {
+	if (e.target !== e.currentTarget) return;
+	if (e.key === "Enter" || e.key === " ") toggle();
+}}>
+```
+
+（先例：UsageView `:362`；复核曾实际抓到该缺陷并修复。）
+
+> **Gotcha**: `import { Fragment } from "hono/jsx/dom"` 直接 typecheck 失败（TS2786，dom runtime 的 Fragment 类型签名与 `jsxImportSource: hono/jsx/dom` 的元素类型检查不兼容）。组件返回「兄弟节点对」用 `flatMap` 返回数组方案替代 Fragment，语义等价且零类型风险。
+
 ---
 
 ## Common Mistakes
