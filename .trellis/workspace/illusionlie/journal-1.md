@@ -632,3 +632,25 @@ usage_logs 新增 cached_input_tokens / cache_creation_tokens 两列（迁移 00
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 管理台使用日志详情展开视图
+
+**Date**: 2026-10-21
+**Task**: 管理台使用日志详情展开视图
+**Branch**: `main`
+
+### Summary
+
+UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 tokens/cost/请求路径收进详情，用时与首 token 合并列，状态保持 ok/error 加色 badge，UsageLog 类型补五字段；check 复核抓到并修复行内按钮键盘双触发 P0（target/currentTarget 守卫）；spec 沉淀可展开行守卫模式 + hono dom Fragment gotcha；顺带归档上会话 developer-role-normalize。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `add2548` | (see git log) |
+| `10a0eb8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
