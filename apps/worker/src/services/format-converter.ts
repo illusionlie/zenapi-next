@@ -2893,3 +2893,69 @@ export function createOpenaiToResponsesStreamTransform(): TransformStream<
 		},
 	});
 }
+
+// Developer 角色透传归一化（settings 开关 normalize_developer_role）：
+// 与 openaiToAnthropicRequest / convertResponsesInputItem 的既有 developer
+// 处理语义刻意不同——那两处是「hoist + 拼接 + 消息消失」（为单 system 字段
+// 协议设计：Anthropic 顶层 system / Responses instructions），多模态 part
+// 会被压成纯文本、消息移出原位、多条合并。透传归一化是「原位改名」：
+// 保序、保内容（含多模态 part 与空内容）、不移动位置、不合并——openai
+// chat 协议允许多条 system，改名是最小侵入且对上游无损的兼容手段。
+// 两者在各自的合法消费场景互不可替代，不复用。
+
+/**
+ * Chat completions 体：`messages` 数组中 `role === "developer"` 的消息原位
+ * 改名为 `"system"`。内容零接触（不碰 content / 多模态 part，空内容保留），
+ * 位置不动，不合并相邻 system，不触碰 `tool` 等其他角色；messages 缺失或
+ * 非数组时 no-op。直接 mutate 传入对象（调用方总在 per-call 副本上操作，
+ * 见 proxy.ts buildChannelRequest 的 bodyCopy 模式）。
+ * 返回是否发生了修改——false 时调用方应回退字节级透传（不重序列化）。
+ */
+export function normalizeChatDeveloperRole(
+	body: Record<string, unknown>,
+): boolean {
+	const messages = body.messages;
+	if (!Array.isArray(messages)) {
+		return false;
+	}
+	let changed = false;
+	for (const msg of messages) {
+		if (
+			msg &&
+			typeof msg === "object" &&
+			(msg as Record<string, unknown>).role === "developer"
+		) {
+			(msg as Record<string, unknown>).role = "system";
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+/**
+ * Responses 体：`input` 数组中 `type === "message" && role === "developer"`
+ * 的 item 原位改名为 `"system"`。`function_call` / `function_call_output` /
+ * `reasoning` 等非 message item 不命中；input 缺失或非数组时原样 no-op
+ * （不崩溃）。mutate 语义与返回值约定同 normalizeChatDeveloperRole。
+ */
+export function normalizeResponsesDeveloperRole(
+	body: Record<string, unknown>,
+): boolean {
+	const input = body.input;
+	if (!Array.isArray(input)) {
+		return false;
+	}
+	let changed = false;
+	for (const item of input) {
+		if (
+			item &&
+			typeof item === "object" &&
+			(item as Record<string, unknown>).type === "message" &&
+			(item as Record<string, unknown>).role === "developer"
+		) {
+			(item as Record<string, unknown>).role = "system";
+			changed = true;
+		}
+	}
+	return changed;
+}

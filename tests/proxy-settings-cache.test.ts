@@ -3,6 +3,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import {
 	DEFAULT_PROXY_RETRY_DELAY_MS,
 	DEFAULT_PROXY_RETRY_ROUNDS,
+	DEVELOPER_NORMALIZE_ROLE_KEY,
 	MAX_PROXY_RETRY_ROUNDS,
 	PROXY_RETRY_DELAY_MS_KEY,
 	PROXY_RETRY_ROUNDS_KEY,
@@ -90,7 +91,7 @@ describe("loadProxySettingsCached", () => {
 		expect(b.prepareCount()).toBe(1);
 	});
 
-	it("reads all four proxy keys in a single query", async () => {
+	it("reads all five proxy keys in a single query", async () => {
 		let boundKeys: string[] = [];
 		const db = {
 			prepare: (sql: string) => {
@@ -112,6 +113,7 @@ describe("loadProxySettingsCached", () => {
 			PROXY_REMOVE_HEADERS_KEY,
 			PROXY_RETRY_ROUNDS_KEY,
 			PROXY_RETRY_DELAY_MS_KEY,
+			DEVELOPER_NORMALIZE_ROLE_KEY,
 		]);
 	});
 });

@@ -529,17 +529,54 @@ export async function setProxyRetryDelayMs(
 	await upsertSetting(db, PROXY_RETRY_DELAY_MS_KEY, delayMs.toString());
 }
 
-// Proxy runtime settings snapshot (header policy ×2 + retry ×2, cached read)
+// Developer role passthrough normalization (settings 开关：透传路径把
+// role:"developer" 原位改名为 "system"，兼容不识别 developer 的上游)
+
+export const DEVELOPER_NORMALIZE_ROLE_KEY = "normalize_developer_role";
 
 /**
- * The four settings keys the proxy hot path consumes, read in one query:
- * global header policy (extra/remove) + retry config (rounds/delay).
+ * Pure resolver for the developer-role normalization flag. Two-level chain:
+ * a stored value wins only when it is the strict "true"/"false" pair, and a
+ * missing or dirty stored value degrades straight to the default false. No
+ * env fallback tier (unlike resolveDebugLogFlag): env tiers exist solely to
+ * serve the env→settings migration of legacy keys, and this key was born in
+ * settings with nothing to migrate — the third tier would be dead weight
+ * (settings-config.md 三级链的合法两级退化，读宽写严不变). Kept DB-free so
+ * callers reading through the cached snapshot re-evaluate it on every call.
+ */
+export function resolveDeveloperNormalizeFlag(raw: SettingsRawMap): boolean {
+	return (raw[DEVELOPER_NORMALIZE_ROLE_KEY] ?? null) === "true";
+}
+
+/**
+ * Updates the developer-role normalization flag (stored strictly as
+ * "true"/"false").
+ */
+export async function setDeveloperNormalizeFlag(
+	db: D1Database,
+	enabled: boolean,
+): Promise<void> {
+	await upsertSetting(
+		db,
+		DEVELOPER_NORMALIZE_ROLE_KEY,
+		enabled ? "true" : "false",
+	);
+}
+
+// Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
+// normalize flag, cached read)
+
+/**
+ * The five settings keys the proxy hot path consumes, read in one query:
+ * global header policy (extra/remove) + retry config (rounds/delay) + the
+ * developer-role normalization flag.
  */
 export const PROXY_SETTING_KEYS = [
 	PROXY_EXTRA_HEADERS_KEY,
 	PROXY_REMOVE_HEADERS_KEY,
 	PROXY_RETRY_ROUNDS_KEY,
 	PROXY_RETRY_DELAY_MS_KEY,
+	DEVELOPER_NORMALIZE_ROLE_KEY,
 ] as const;
 
 const PROXY_SETTINGS_CACHE_KEY = "proxy";
@@ -552,7 +589,7 @@ const PROXY_SETTINGS_CACHE_KEY = "proxy";
 const proxySettingsCaches = new WeakMap<D1Database, TtlCache<SettingsRawMap>>();
 
 /**
- * Loads the four proxy runtime settings keys with a single SQL query,
+ * Loads the five proxy runtime settings keys with a single SQL query,
  * memoized PROXY_SETTINGS_CACHE_TTL_MS per db binding. Only the raw
  * settings-table read is cached — callers re-run the pure fallback-chain /
  * clamp / fail-open parsers (resolveProxyRetryConfig, parseHeaderPolicyFromRaw)
@@ -752,4 +789,19 @@ export async function setDebugRequestBodyLog(
 		DEBUG_REQUEST_BODY_LOG_KEY,
 		enabled ? "true" : "false",
 	);
+}
+
+/**
+ * Uncached read for the admin settings form — the "admin form truth" posture
+ * (same contract as loadDebugLogFlagDirect): a PUT followed by a GET on the
+ * same isolate must observe the new value immediately, so this variant
+ * bypasses the loadProxySettingsCached TTL memoization that serves the proxy
+ * hot path (30s staleness window). Resolver semantics are identical to
+ * resolveDeveloperNormalizeFlag (two-level chain, no env fallback).
+ */
+export async function loadDeveloperNormalizeFlagDirect(
+	db: D1Database,
+): Promise<boolean> {
+	const raw = await readSettingsRawMap(db, [DEVELOPER_NORMALIZE_ROLE_KEY]);
+	return resolveDeveloperNormalizeFlag(raw);
 }

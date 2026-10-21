@@ -25,6 +25,8 @@ import {
 	createAnthropicToOpenaiStreamTransform,
 	createOpenaiToResponsesStreamTransform,
 	createResponsesToChatStreamTransform,
+	normalizeChatDeveloperRole,
+	normalizeResponsesDeveloperRole,
 	openaiToAnthropicRequest,
 	openaiToResponsesRequest,
 	openaiToResponsesResponse,
@@ -39,6 +41,7 @@ import {
 import { calculateCost, getModelPrice } from "../services/pricing";
 import {
 	loadProxySettingsCached,
+	resolveDeveloperNormalizeFlag,
 	resolveProxyRetryConfig,
 } from "../services/settings";
 import { recordUsage } from "../services/usage";
@@ -147,6 +150,12 @@ function isConvertedChatPath(path: string): boolean {
  * openai 目标 + /v1/responses 入站在转换后的 chat 体 messages 注入；
  * anthropic / responses 分支转换完成后注入；/v1/responses 透传注入
  * instructions；custom 分支不解释 body 仅注入头。
+ * normalizeDeveloperRole 为设置开关（normalize_developer_role，默认 false）：
+ * 仅作用于 openai 协议族两处裸透传（chat 透传的 messages / responses 原生
+ * 透传的 input message item），把 role:"developer" 原位改名为 "system"；
+ * 与 disguisePrompt 共享同一次 bodyCopy 拷贝与 stringify（先归一化后注入），
+ * 无 developer 且无伪装时回退字节级 requestText（不重序列化）。anthropic /
+ * responses 转换分支（已 hoist）与 custom 分支不受影响。
  */
 export function buildChannelRequest(
 	channel: ChannelRecord,
@@ -159,6 +168,7 @@ export function buildChannelRequest(
 	apiKey?: string,
 	policy?: ProxyHeaderPolicy | null,
 	disguisePrompt?: string | null,
+	normalizeDeveloperRole?: boolean,
 ): { target: string; headers: Headers; body: string | undefined } {
 	const effectiveKey = apiKey ?? channel.api_key;
 	const apiFormat = channel.api_format ?? "openai";
@@ -214,12 +224,40 @@ export function buildChannelRequest(
 			// interpret store / previous_response_id etc.; state lives upstream.
 			// Disguise prompt (#4, design §3.1) still injects into `instructions`
 			// via a per-call shallow copy so the caller's parsed body stays
-			// pristine across retry rounds and channels.
+			// pristine across retry rounds and channels. Developer-role
+			// normalization (normalize_developer_role) rides the same rewrite
+			// gate (design D4, single stringify): input items are cloned per-item
+			// before the in-place rename so the caller's shared parsed body never
+			// mutates — otherwise a retry after a successful rename would find no
+			// developer left and fall back to the un-normalized requestText.
 			target = cfSafeUrl(`${baseUrl}/responses${querySuffix}`);
-			if (disguisePrompt && parsedBody) {
+			const shouldNormalizeInput =
+				normalizeDeveloperRole === true && parsedBody !== null;
+			if ((disguisePrompt && parsedBody) || shouldNormalizeInput) {
 				const bodyCopy: Record<string, unknown> = { ...parsedBody };
-				injectSystemPromptResponses(bodyCopy, disguisePrompt);
-				body = JSON.stringify(bodyCopy);
+				if (shouldNormalizeInput && Array.isArray(bodyCopy.input)) {
+					// Per-item clone before the in-place rename: the caller's shared
+					// parsed body must stay pristine across retry rounds (a rename
+					// leaking into it would make a retry find no developer left and
+					// fall back to the un-normalized requestText).
+					bodyCopy.input = (bodyCopy.input as unknown[]).map((item) =>
+						item && typeof item === "object"
+							? { ...(item as Record<string, unknown>) }
+							: item,
+					);
+				}
+				let changed = false;
+				if (shouldNormalizeInput) {
+					changed = normalizeResponsesDeveloperRole(bodyCopy);
+				}
+				if (disguisePrompt && parsedBody) {
+					injectSystemPromptResponses(bodyCopy, disguisePrompt);
+					changed = true;
+				}
+				// Flag on but no developer item found and no disguise fired → keep
+				// the original requestText (byte-identical passthrough, no
+				// re-serialization, AC1/AC2).
+				body = changed ? JSON.stringify(bodyCopy) : requestText || undefined;
 			} else {
 				body = requestText || undefined;
 			}
@@ -324,19 +362,51 @@ export function buildChannelRequest(
 	// shared parsed body never accumulates injections across retry rounds and
 	// channels. Embeddings and other bodies without a messages array pass
 	// through untouched, same as the stream_options injection precedent.
+	// Developer-role normalization (normalize_developer_role setting) rides
+	// the same rewrite gate (design D4, single stringify): messages are cloned
+	// per-item before the in-place rename so the caller's shared parsed body
+	// never mutates — otherwise a retry after a successful rename would find
+	// no developer left and fall back to the un-normalized requestText. Flag
+	// on with no developer message and no disguise → body stays byte-identical
+	// requestText (no re-serialization, AC1/AC2).
 	let body: string | undefined = requestText || undefined;
-	if (
-		disguisePrompt &&
-		parsedBody &&
+	const shouldNormalizeDeveloper =
+		normalizeDeveloperRole === true &&
+		parsedBody !== null &&
+		Array.isArray(parsedBody.messages);
+	const injectDisguisePrompt =
+		Boolean(disguisePrompt) &&
+		parsedBody !== null &&
 		isConvertedChatPath(targetPath) &&
-		Array.isArray(parsedBody.messages)
-	) {
-		const bodyCopy: Record<string, unknown> = {
-			...parsedBody,
-			messages: [...parsedBody.messages],
-		};
-		injectSystemPromptOpenAI(bodyCopy, disguisePrompt);
-		body = JSON.stringify(bodyCopy);
+		Array.isArray(parsedBody.messages);
+	if (shouldNormalizeDeveloper || injectDisguisePrompt) {
+		const bodyCopy: Record<string, unknown> = { ...parsedBody };
+		if (Array.isArray(bodyCopy.messages)) {
+			const items = bodyCopy.messages as unknown[];
+			// Normalize path: per-item clone before the in-place rename — the
+			// caller's shared parsed body must stay pristine across retry rounds
+			// (a rename leaking into it would make a retry find no developer left
+			// and fall back to the un-normalized requestText). Disguise path:
+			// plain array clone, unchanged behavior.
+			bodyCopy.messages = shouldNormalizeDeveloper
+				? items.map((msg) =>
+						msg && typeof msg === "object"
+							? { ...(msg as Record<string, unknown>) }
+							: msg,
+					)
+				: [...items];
+		}
+		let changed = false;
+		if (shouldNormalizeDeveloper) {
+			changed = normalizeChatDeveloperRole(bodyCopy);
+		}
+		if (disguisePrompt && isConvertedChatPath(targetPath)) {
+			injectSystemPromptOpenAI(bodyCopy, disguisePrompt);
+			changed = true;
+		}
+		if (changed) {
+			body = JSON.stringify(bodyCopy);
+		}
 	}
 	return { target, headers, body };
 }
@@ -568,7 +638,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 	}
 
 	// 热路径读并行合一（design.md）：per-channel 别名解析、aliasOnly 全图、
-	// 活跃渠道、代理运行时 settings（4 键一次 IN 查询）进单个 Promise.all——
+	// 活跃渠道、代理运行时 settings（5 键一次 IN 查询）进单个 Promise.all——
 	// 鉴权 JOIN 之后只剩这一个串行 RTT 阶段。channels / 别名走 10s TTL 缓存、
 	// settings 只缓存 raw 读（30s）；头策略 fail-open 解析与重试配置三级
 	// 回退链（settings → env → 默认，含 clamp）从 raw map 纯解析，每次照常执行。
@@ -591,6 +661,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 		rounds: c.env.PROXY_RETRY_ROUNDS,
 		delayMs: c.env.PROXY_RETRY_DELAY_MS,
 	});
+	// developer 归一化开关：同快照纯解析（两级链，无 env 回退），零新增查询
+	const normalizeDeveloperRole = resolveDeveloperNormalizeFlag(proxySettings);
 
 	const reasoningEffort = extractReasoningEffort(parsedBody);
 	// Chat-only stream_options usage injection happens here for chat-shaped
@@ -789,6 +861,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					apiKey,
 					headerPolicy,
 					channel.disguise_system_prompt ?? null,
+					normalizeDeveloperRole,
 				);
 
 				// Per-attempt response for the cooldown accounting: a fetch throw

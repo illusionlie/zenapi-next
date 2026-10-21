@@ -550,6 +550,30 @@ export const SettingsView = ({
 						</p>
 					</div>
 					<div class="lg:col-span-2">
+						<label class="flex items-center gap-2 text-sm text-stone-700">
+							<input
+								type="checkbox"
+								class="h-4 w-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400"
+								checked={settingsForm.normalize_developer_role === "true"}
+								onChange={(event) => {
+									const target = event.currentTarget as HTMLInputElement | null;
+									onFormChange({
+										normalize_developer_role: target?.checked
+											? "true"
+											: "false",
+									});
+								}}
+							/>
+							developer 角色归一化
+						</label>
+						<p class="mt-1 text-xs text-stone-500">
+							开启后，透传请求体中 developer 角色的消息将改写为 system
+							再发往上游（兼容智谱 GLM 等不识别 developer
+							角色的上游）。注意：developer 指令优先级语义会降级为
+							system；对原生支持 developer 的 OpenAI 官方端点建议保持关闭。
+						</p>
+					</div>
+					<div class="lg:col-span-2">
 						<label
 							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
 							for="proxy-extra-headers"

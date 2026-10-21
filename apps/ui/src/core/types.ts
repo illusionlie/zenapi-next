@@ -220,6 +220,8 @@ export type Settings = {
 	proxy_remove_headers: string;
 	proxy_retry_rounds: number;
 	proxy_retry_delay_ms: number;
+	/** developer 角色透传归一化开关（默认关闭） */
+	normalize_developer_role: boolean;
 	model_test_prompt: string;
 	turnstile_enabled: boolean;
 	turnstile_site_key: string;
@@ -324,6 +326,8 @@ export type SettingsForm = {
 	proxy_remove_headers: string;
 	proxy_retry_rounds: string;
 	proxy_retry_delay_ms: string;
+	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
+	normalize_developer_role: string;
 	model_test_prompt: string;
 	/** "true" / "false" 直传后端（服务端仅接受这两个字符串） */
 	turnstile_enabled: string;

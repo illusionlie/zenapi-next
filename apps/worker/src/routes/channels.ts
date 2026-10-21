@@ -28,7 +28,11 @@ import {
 	type ModelTestOutcome,
 	parseModelTestResponse,
 } from "../services/model-testing";
-import { getModelTestPrompt } from "../services/settings";
+import {
+	getModelTestPrompt,
+	loadProxySettingsCached,
+	resolveDeveloperNormalizeFlag,
+} from "../services/settings";
 import { generateToken } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
@@ -618,6 +622,11 @@ channels.post("/test-model", async (c) => {
 	const { bodyText, parsedBody } = buildModelTestRequestBody(model, text);
 	const upstreamKey = parseApiKeys(apiKey)[0] ?? apiKey;
 	const incomingHeaders = new Headers({ "content-type": "application/json" });
+	// developer 归一化开关：经 30s TTL 缓存的代理 settings 快照解析（两级链
+	// 无 env 回退），与主代理 / Playground 行为一致
+	const normalizeDeveloperRole = resolveDeveloperNormalizeFlag(
+		await loadProxySettingsCached(c.env.DB),
+	);
 
 	// 豁免全局请求头策略：模型测试不注入/剔除全局头（policy=null，同
 	// Playground），渠道级 custom_headers 仍生效
@@ -636,6 +645,7 @@ channels.post("/test-model", async (c) => {
 		upstreamKey,
 		null,
 		disguiseSystemPrompt,
+		normalizeDeveloperRole,
 	);
 
 	const start = Date.now();

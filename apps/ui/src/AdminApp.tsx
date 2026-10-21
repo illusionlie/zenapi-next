@@ -249,6 +249,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			proxy_remove_headers: settings.proxy_remove_headers ?? "",
 			proxy_retry_rounds: String(settings.proxy_retry_rounds ?? 2),
 			proxy_retry_delay_ms: String(settings.proxy_retry_delay_ms ?? 200),
+			normalize_developer_role: settings.normalize_developer_role
+				? "true"
+				: "false",
 			model_test_prompt: settings.model_test_prompt ?? "",
 			turnstile_enabled: settings.turnstile_enabled ? "true" : "false",
 			turnstile_site_key: settings.turnstile_site_key ?? "",
@@ -689,6 +692,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				proxy_remove_headers: settingsForm.proxy_remove_headers,
 				proxy_retry_rounds: Number(settingsForm.proxy_retry_rounds),
 				proxy_retry_delay_ms: Number(settingsForm.proxy_retry_delay_ms),
+				normalize_developer_role:
+					settingsForm.normalize_developer_role === "true",
 				model_test_prompt: settingsForm.model_test_prompt,
 				turnstile_enabled: settingsForm.turnstile_enabled,
 				turnstile_site_key: settingsForm.turnstile_site_key,

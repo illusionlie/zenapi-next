@@ -19,6 +19,7 @@ import {
 	getTurnstileConfig,
 	isAdminPasswordSet,
 	loadDebugLogFlagDirect,
+	loadDeveloperNormalizeFlagDirect,
 	loadProxyRetryConfig,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
@@ -30,6 +31,7 @@ import {
 	setCheckinReward,
 	setDebugRequestBodyLog,
 	setDefaultBalance,
+	setDeveloperNormalizeFlag,
 	setLdcEpayGateway,
 	setLdcEpayKey,
 	setLdcEpayPid,
@@ -81,6 +83,10 @@ settings.get("/", async (c) => {
 	// （loadDebugLogFlagDirect），/v1 热路径中间件仍走缓存的 loadDebugLogFlag；
 	// 也不透显 env 值，避免保存时把 env 值意外固化进 settings
 	const debugRequestBodyLog = await loadDebugLogFlagDirect(c.env.DB);
+	// 同一 "admin form truth" GET 契约：绕 30s 缓存直读，两级链无 env 回退
+	const normalizeDeveloperRole = await loadDeveloperNormalizeFlagDirect(
+		c.env.DB,
+	);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -101,6 +107,7 @@ settings.get("/", async (c) => {
 		proxy_retry_delay_ms: proxyRetryConfig.delayMs,
 		model_test_prompt: modelTestPrompt,
 		debug_request_body_log: debugRequestBodyLog,
+		normalize_developer_role: normalizeDeveloperRole,
 		// secret 永不回显，只返回已设置布尔（先例：admin_password_hash）
 		turnstile_enabled: turnstileConfig.enabled,
 		turnstile_site_key: turnstileConfig.siteKey,
@@ -326,6 +333,31 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setDebugRequestBodyLog(c.env.DB, value === true || value === "true");
+		touched = true;
+	}
+
+	// Developer 角色归一化开关：写侧严格布尔（同 debug 键约定——仅接受
+	// true/false 布尔或 "true"/"false" 字符串，其余 400）；读取侧两级链
+	// 无 env 回退，缺失/脏值一律降级 false（默认关闭）
+	if (body.normalize_developer_role !== undefined) {
+		const value = body.normalize_developer_role;
+		if (
+			value !== true &&
+			value !== false &&
+			value !== "true" &&
+			value !== "false"
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_normalize_developer_role",
+				"invalid_normalize_developer_role",
+			);
+		}
+		await setDeveloperNormalizeFlag(
+			c.env.DB,
+			value === true || value === "true",
+		);
 		touched = true;
 	}
 

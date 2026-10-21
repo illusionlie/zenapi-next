@@ -110,6 +110,7 @@ export const initialSettingsForm: SettingsForm = {
 	proxy_remove_headers: "",
 	proxy_retry_rounds: "2",
 	proxy_retry_delay_ms: "200",
+	normalize_developer_role: "false",
 	model_test_prompt: "",
 	turnstile_enabled: "false",
 	turnstile_site_key: "",

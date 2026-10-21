@@ -4,7 +4,11 @@ import { collectUniqueModelIds } from "../services/channel-models";
 import { selectTargetFormat } from "../services/channel-routing";
 import { parseApiFormats } from "../services/channel-types";
 import { type ChannelRecord, createWeightedOrder } from "../services/channels";
-import { loadProxyRetryConfig } from "../services/settings";
+import {
+	loadProxyRetryConfig,
+	loadProxySettingsCached,
+	resolveDeveloperNormalizeFlag,
+} from "../services/settings";
 import { jsonError } from "../utils/http";
 import { parseApiKeys, shuffleArray } from "../utils/keys";
 import { isRetryableStatus, sleep } from "../utils/retry";
@@ -97,6 +101,11 @@ playground.post("/chat", async (c) => {
 			rounds: c.env.PROXY_RETRY_ROUNDS,
 			delayMs: c.env.PROXY_RETRY_DELAY_MS,
 		});
+	// developer 归一化开关：经 30s TTL 缓存的代理 settings 快照解析（两级链
+	// 无 env 回退），与主代理 / test-model 行为一致
+	const normalizeDeveloperRole = resolveDeveloperNormalizeFlag(
+		await loadProxySettingsCached(c.env.DB),
+	);
 	let lastResponse: Response | null = null;
 
 	let round = 0;
@@ -128,6 +137,7 @@ playground.post("/chat", async (c) => {
 					apiKey,
 					null,
 					channel.disguise_system_prompt ?? null,
+					normalizeDeveloperRole,
 				);
 
 				try {
