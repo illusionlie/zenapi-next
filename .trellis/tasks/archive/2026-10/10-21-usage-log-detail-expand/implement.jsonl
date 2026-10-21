@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker-ui/frontend/component-guidelines.md", "reason": "UsageView 组件改造遵循 UI 组件规范(样式语言/hono/jsx/dom 写法);Modal/SecretValueModal 为键值排版参考"}
+{"file": ".trellis/spec/api-worker-ui/frontend/type-safety.md", "reason": "UsageLog 类型补齐五字段(request_path/cached_input_tokens/cache_creation_tokens/error_code/error_message)需遵循类型规范,禁 any"}
+{"file": ".trellis/spec/api-worker-ui/frontend/quality-guidelines.md", "reason": "UI 质量门禁:biome tab/双引号、check/typecheck/test 全绿"}
+{"file": ".trellis/spec/api-worker-ui/frontend/state-management.md", "reason": "展开行 Set<id> 本地 state 的管理方式参考现有视图 state 约定"}
