@@ -1,6 +1,6 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { nowIso } from "../utils/time";
-import { pruneUsageLogsBatched } from "./usage-stats";
+import { pruneUsageLogsBatched, retentionCutoffIso } from "./usage-stats";
 
 export type UsageInput = {
 	tokenId?: string | null;
@@ -115,13 +115,16 @@ export async function recordUsage(
 /**
  * Deletes usage logs older than the retention window, in bounded batches
  * (delegates to pruneUsageLogsBatched — the old single-statement DELETE could
- * hit the D1 per-statement time limit on large tables).
+ * hit the D1 per-statement time limit on large tables). Returns the deleted
+ * row count; a tripped round fuse leaves the rest to the next call.
  */
 export async function pruneUsageLogs(
 	db: D1Database,
 	retentionDays: number,
 ): Promise<number> {
-	const cutoff = new Date();
-	cutoff.setDate(cutoff.getDate() - retentionDays);
-	return pruneUsageLogsBatched(db, cutoff.toISOString());
+	const { deleted } = await pruneUsageLogsBatched(
+		db,
+		retentionCutoffIso(new Date(), retentionDays),
+	);
+	return deleted;
 }

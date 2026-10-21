@@ -16,6 +16,18 @@ import { getRetentionDays } from "./settings";
 /** Rollup rows older than this many UTC dates are pruned by the daily cron. */
 export const ROLLUP_RETENTION_DAYS = 180;
 
+/** Rows deleted per round of the batched usage_logs retention prune. */
+export const RETENTION_CHUNK_ROWS = 5000;
+
+/**
+ * Round cap per pruneUsageLogsBatched invocation — the fuse that keeps the
+ * whole cron chain inside the D1 per-call query budget (worst case ≈ 220
+ * queries with a fully-missing backfill window and a full retention run,
+ * a quarter of the Paid-tier 1000). A tripped fuse is not an error: the
+ * predicate is stable, the leftovers are deleted by the next invocation.
+ */
+export const RETENTION_MAX_ROUNDS = 180;
+
 const DAY_MS = 86_400_000;
 
 /** UTC calendar date string, "YYYY-MM-DD". */
@@ -232,16 +244,46 @@ export async function rollupRange(
 	}
 }
 
-/** Lists UTC dates that have raw logs but no rollup rows yet. */
-export async function rollupMissingDates(db: D1Database): Promise<UtcDate[]> {
-	const result = await db
-		.prepare(
-			`SELECT DISTINCT substr(created_at, 1, 10) AS d FROM usage_logs
-			WHERE substr(created_at, 1, 10) NOT IN (SELECT stat_date FROM usage_stats_daily)
-			ORDER BY d`,
-		)
-		.all<{ d: UtcDate }>();
-	return (result.results ?? []).map((row) => row.d);
+/**
+ * Lists UTC dates in [min(raw created_at), yesterday] that have no rollup
+ * rows yet (the first-deploy full-backfill set). Index-friendly shape: one
+ * MIN probe on the usage_logs_created_at index, one DISTINCT scan of the
+ * small rollup table (≤ 180 rows after its own retention), and the date
+ * enumeration happens in JS — the previous string-function-on-created_at
+ * NOT IN shape disabled the index and degraded to a full table scan. Dates inside the
+ * range without raw rows are included (rolling them writes nothing and is
+ * idempotent); today is excluded because readers never read stat_date =
+ * today — the next cron run rebuilds it whole. `now` injectable for tests.
+ */
+export async function rollupMissingDates(
+	db: D1Database,
+	now: Date = new Date(),
+): Promise<UtcDate[]> {
+	const minRow = await db
+		.prepare("SELECT MIN(created_at) AS m FROM usage_logs")
+		.first<{ m: string | null }>();
+	const min = minRow?.m ?? null;
+	if (!min) {
+		return [];
+	}
+	const rolledResult = await db
+		.prepare("SELECT DISTINCT stat_date FROM usage_stats_daily")
+		.all<{ stat_date: UtcDate }>();
+	const rolledSet = new Set(
+		(rolledResult.results ?? []).map((row) => row.stat_date),
+	);
+	const yesterday = addUtcDays(utcDateOf(now.toISOString()), -1);
+	const missing: UtcDate[] = [];
+	for (
+		let date = utcDateOf(min);
+		date <= yesterday;
+		date = addUtcDays(date, 1)
+	) {
+		if (!rolledSet.has(date)) {
+			missing.push(date);
+		}
+	}
+	return missing;
 }
 
 /**
@@ -257,26 +299,100 @@ export async function rollupBackfill(db: D1Database): Promise<UtcDate[]> {
 	return dates;
 }
 
+/**
+ * Self-healing scan window of the daily chain: probes the last
+ * `lookbackDays` complete UTC days ([today - lookbackDays, yesterday],
+ * today itself excluded — readers never read stat_date = today, so rolling
+ * it would only be write amplification) and rollups only the dates with no
+ * rollup rows yet. Probing goes through the stat_date index; dates whose
+ * raw logs were pruned while their rollup survives are skipped by the probe
+ * hit (the anti-loss guard of rollupDate stays untouched). A single failing
+ * date logs per-date and does not block the rest; a probe failure bubbles
+ * out so the cron step's own catch reports it. Returns the dates rolled
+ * (empty = nothing was missing).
+ */
+export async function rollupRecentMissing(
+	db: D1Database,
+	now: Date,
+	lookbackDays = 7,
+): Promise<UtcDate[]> {
+	const today = utcDateOf(now.toISOString());
+	const yesterday = addUtcDays(today, -1);
+	const rolled: UtcDate[] = [];
+	let scanned = 0;
+	let missing = 0;
+	for (
+		let date = addUtcDays(today, -lookbackDays);
+		date <= yesterday;
+		date = addUtcDays(date, 1)
+	) {
+		scanned++;
+		const probe = await db
+			.prepare(
+				"SELECT 1 AS hit FROM usage_stats_daily WHERE stat_date = ? LIMIT 1",
+			)
+			.bind(date)
+			.first<{ hit: number }>();
+		if (probe !== null) {
+			continue;
+		}
+		missing++;
+		try {
+			await rollupDate(db, date);
+			rolled.push(date);
+		} catch (e) {
+			console.error("[rollup] backfill failed", {
+				date,
+				error: String(e),
+			});
+		}
+	}
+	console.log("[rollup] backfill scan done", {
+		scanned,
+		missing,
+		rolled: rolled.length,
+	});
+	return rolled;
+}
+
 // ---------------------------------------------------------------------------
 // Retention prunes
 // ---------------------------------------------------------------------------
 
+/** Result of the batched retention prune; complete=false = round fuse tripped. */
+export type PruneUsageResult = { deleted: number; complete: boolean };
+
+/**
+ * Cutoff ISO exactly `retentionDays` before `now` — pure UTC millisecond
+ * arithmetic (no local-timezone calendar math), the single cutoff semantics
+ * shared by the cron chain and the manual prune endpoint.
+ */
+export function retentionCutoffIso(now: Date, retentionDays: number): string {
+	return new Date(now.getTime() - retentionDays * DAY_MS).toISOString();
+}
+
 /**
  * Deletes raw usage logs older than `beforeIso` in bounded batches
- * (D1-friendly: one small DELETE per loop instead of one giant statement).
+ * (D1-friendly: one small DELETE per round instead of one giant statement).
  * Re-entrant: every batch is independent and the predicate is stable, so an
- * interrupted run can simply be re-run. Returns the number of deleted rows.
+ * interrupted run can simply be re-run. The round fuse (`maxRounds`, default
+ * RETENTION_MAX_ROUNDS) caps the query count of one invocation; when it
+ * trips, complete=false reports the leftover rows instead of silently
+ * looping into the D1 per-call query limit (which would take down the
+ * session and rollup cleanup steps of the cron chain with it).
  */
 export async function pruneUsageLogsBatched(
 	db: D1Database,
 	beforeIso: string,
-	chunkSize = 500,
-): Promise<number> {
-	if (chunkSize <= 0) {
-		return 0;
+	opts: { chunkSize?: number; maxRounds?: number } = {},
+): Promise<PruneUsageResult> {
+	const chunkSize = opts.chunkSize ?? RETENTION_CHUNK_ROWS;
+	const maxRounds = opts.maxRounds ?? RETENTION_MAX_ROUNDS;
+	if (chunkSize <= 0 || maxRounds <= 0) {
+		return { deleted: 0, complete: false };
 	}
-	let deletedTotal = 0;
-	for (;;) {
+	let deleted = 0;
+	for (let round = 0; round < maxRounds; round++) {
 		const result = await db
 			.prepare(
 				"DELETE FROM usage_logs WHERE rowid IN (SELECT rowid FROM usage_logs WHERE created_at < ? LIMIT ?)",
@@ -284,11 +400,12 @@ export async function pruneUsageLogsBatched(
 			.bind(beforeIso, chunkSize)
 			.run();
 		const changes = result.meta?.changes ?? 0;
-		deletedTotal += changes;
+		deleted += changes;
 		if (changes < chunkSize) {
-			return deletedTotal;
+			return { deleted, complete: true };
 		}
 	}
+	return { deleted, complete: false };
 }
 
 /** Deletes expired admin and user sessions (small tables, single statements). */
@@ -324,11 +441,12 @@ export async function pruneRollup(
 
 /**
  * The daily maintenance chain executed by the Workers cron (03:17 UTC):
- * rollup yesterday → batched prune of expired raw logs (retention read from
- * settings) → prune expired sessions → prune rollups past their own
- * retention. Every step is fault-isolated: a failing step logs and the rest
- * still run — a cron invocation has no response channel, console is the only
- * visibility (same posture as the post-response billing epilogue).
+ * self-healing rollup backfill of the last 7 complete days → batched prune
+ * of expired raw logs (retention read from settings, round-fused) → prune
+ * expired sessions → prune rollups past their own retention. Every step is
+ * fault-isolated: a failing step logs and the rest still run — a cron
+ * invocation has no response channel, console is the only visibility (same
+ * posture as the post-response billing epilogue).
  */
 export async function runDailyMaintenance(
 	db: D1Database,
@@ -336,22 +454,31 @@ export async function runDailyMaintenance(
 ): Promise<void> {
 	const todayUtc = utcDateOf(now.toISOString());
 
-	const yesterday = addUtcDays(todayUtc, -1);
 	try {
-		await rollupDate(db, yesterday);
-		console.log("[rollup] daily rollup done", { date: yesterday });
+		await rollupRecentMissing(db, now);
 	} catch (e) {
-		console.error("[rollup] daily rollup failed", {
-			date: yesterday,
-			error: String(e),
-		});
+		console.error("[rollup] daily rollup failed", { error: String(e) });
 	}
 
 	try {
 		const retentionDays = await getRetentionDays(db);
-		const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
-		const deleted = await pruneUsageLogsBatched(db, cutoff.toISOString());
-		console.log("[retention] usage_logs pruned", { retentionDays, deleted });
+		const cutoff = retentionCutoffIso(now, retentionDays);
+		const { deleted, complete } = await pruneUsageLogsBatched(db, cutoff);
+		if (complete) {
+			console.log("[retention] usage_logs pruned", {
+				retentionDays,
+				deleted,
+				complete,
+			});
+		} else {
+			// Fuse tripped: the chain moved on, the leftovers are picked up by
+			// the next invocation — but the operator should see it, hence warn.
+			console.warn("[retention] usage_logs pruned", {
+				retentionDays,
+				deleted,
+				complete,
+			});
+		}
 	} catch (e) {
 		console.error("[retention] usage_logs prune failed", { error: String(e) });
 	}

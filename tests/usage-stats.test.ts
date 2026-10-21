@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import dashboardRoutes from "../apps/worker/src/routes/dashboard";
 import modelsRoutes from "../apps/worker/src/routes/models";
 import monitoringRoutes from "../apps/worker/src/routes/monitoring";
+import usageRoutes from "../apps/worker/src/routes/usage";
 import {
 	addUtcDays,
 	loadDashboardDaily,
@@ -17,7 +18,10 @@ import {
 	pruneExpiredSessions,
 	pruneRollup,
 	pruneUsageLogsBatched,
+	retentionCutoffIso,
 	rollupDate,
+	rollupMissingDates,
+	rollupRecentMissing,
 	runDailyMaintenance,
 	splitWindow,
 	utcDateOf,
@@ -91,6 +95,79 @@ function makeD1(db: DatabaseSync): D1Database {
 		},
 	};
 	return d1 as unknown as D1Database;
+}
+
+type BatchRecord = { sqls: string[]; bound: unknown[][] };
+
+/**
+ * Wraps a D1 adapter with observation/injection hooks for the
+ * maintenance-chain tests: records every db.batch (statement sqls + bound
+ * params) and every prepare, can inject a batch failure (predicate on the
+ * record), and can fake the reported `changes` of chosen statements — the
+ * statement still executes for real, only the reported count lies (e.g.
+ * make the retention DELETE report a full chunk every round to trip the
+ * round fuse deterministically while the rows really do get deleted).
+ */
+function wrapD1(
+	real: D1Database,
+	hooks: {
+		onBatch?: (rec: BatchRecord) => void;
+		onPrepare?: (sql: string) => void;
+		failBatchIf?: (rec: BatchRecord) => boolean;
+		fakeChangesIf?: (sql: string) => number | undefined;
+	} = {},
+): D1Database {
+	const wrapStmt = (sql: string) => {
+		let bound: unknown[] = [];
+		const stmt = {
+			sql,
+			bind(...args: unknown[]) {
+				bound = args;
+				return stmt;
+			},
+			async run() {
+				const result = await real
+					.prepare(sql)
+					.bind(...(bound as never[]))
+					.run();
+				const fake = hooks.fakeChangesIf?.(sql);
+				if (fake !== undefined) {
+					return { ...result, meta: { ...result?.meta, changes: fake } };
+				}
+				return result;
+			},
+			async all() {
+				return real.prepare(sql).bind(...(bound as never[])).all();
+			},
+			async first() {
+				return real.prepare(sql).bind(...(bound as never[])).first();
+			},
+			boundParams: () => bound,
+		};
+		return stmt;
+	};
+	const wrapped = {
+		prepare(sql: string) {
+			hooks.onPrepare?.(sql);
+			return wrapStmt(sql);
+		},
+		async batch(statements: Array<{ run(): Promise<unknown> }>) {
+			const recordable = statements as Array<{
+				sql: string;
+				boundParams(): unknown[];
+			}>;
+			const rec: BatchRecord = {
+				sqls: recordable.map((s) => s.sql),
+				bound: recordable.map((s) => s.boundParams()),
+			};
+			hooks.onBatch?.(rec);
+			if (hooks.failBatchIf?.(rec)) {
+				throw new Error("injected batch failure");
+			}
+			return real.batch(statements);
+		},
+	};
+	return wrapped as unknown as D1Database;
 }
 
 let seq = 0;
@@ -763,13 +840,18 @@ describe("sub-day window equivalence (split == raw-only)", () => {
 // ---------------------------------------------------------------------------
 
 describe("pruneUsageLogsBatched", () => {
+	// Fixed clock: every seed timestamp and cutoff derives from this instant.
+	const now = new Date("2026-10-20T03:17:00.000Z");
+	const cutoff30 = retentionCutoffIso(now, 30);
+
 	function seedLogs(sqlite: DatabaseSync, oldCount: number, newCount: number) {
-		const cutoffIso = new Date(Date.now() - 40 * 86_400_000).toISOString();
+		const oldIso = retentionCutoffIso(now, 40); // well past the cutoff
 		for (let i = 0; i < oldCount; i++) {
-			insertLog(sqlite, { created_at: cutoffIso });
+			insertLog(sqlite, { created_at: oldIso });
 		}
+		const freshIso = retentionCutoffIso(now, -1); // safely after the cutoff
 		for (let i = 0; i < newCount; i++) {
-			insertLog(sqlite, { created_at: new Date().toISOString() });
+			insertLog(sqlite, { created_at: freshIso });
 		}
 	}
 
@@ -778,38 +860,257 @@ describe("pruneUsageLogsBatched", () => {
 		seedLogs(sqlite, 7, 3);
 		const db = makeD1(sqlite);
 
-		const deleted = await pruneUsageLogsBatched(
-			db,
-			new Date(Date.now() - 30 * 86_400_000).toISOString(),
-			3,
-		);
-		expect(deleted).toBe(7);
+		const first = await pruneUsageLogsBatched(db, cutoff30, { chunkSize: 3 });
+		expect(first).toEqual({ deleted: 7, complete: true });
 		expect(
 			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
 		).toBe(3);
 
 		// Re-running is a no-op (termination + idempotency).
 		expect(
-			await pruneUsageLogsBatched(
-				db,
-				new Date(Date.now() - 30 * 86_400_000).toISOString(),
-				3,
-			),
-		).toBe(0);
+			await pruneUsageLogsBatched(db, cutoff30, { chunkSize: 3 }),
+		).toEqual({ deleted: 0, complete: true });
 	});
 
 	it("deletes everything in one batch when the chunk exceeds the table", async () => {
 		const sqlite = createSqlite();
 		seedLogs(sqlite, 5, 0);
-		const deleted = await pruneUsageLogsBatched(
-			makeD1(sqlite),
-			new Date(Date.now() - 30 * 86_400_000).toISOString(),
-			500,
-		);
-		expect(deleted).toBe(5);
+		const result = await pruneUsageLogsBatched(makeD1(sqlite), cutoff30, {
+			chunkSize: 500,
+		});
+		expect(result).toEqual({ deleted: 5, complete: true });
 		expect(
 			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
 		).toBe(0);
+	});
+
+	it("trips the round fuse and reports incomplete (35 rows, chunk 10, 2 rounds)", async () => {
+		const sqlite = createSqlite();
+		seedLogs(sqlite, 35, 0);
+		const result = await pruneUsageLogsBatched(makeD1(sqlite), cutoff30, {
+			chunkSize: 10,
+			maxRounds: 2,
+		});
+		expect(result).toEqual({ deleted: 20, complete: false });
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(15);
+	});
+
+	it("completes when the rows run out inside the allowed rounds (35 rows, chunk 10, 5 rounds)", async () => {
+		const sqlite = createSqlite();
+		seedLogs(sqlite, 35, 0);
+		const result = await pruneUsageLogsBatched(makeD1(sqlite), cutoff30, {
+			chunkSize: 10,
+			maxRounds: 5,
+		});
+		expect(result).toEqual({ deleted: 35, complete: true });
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(0);
+	});
+});
+
+describe("retentionCutoffIso", () => {
+	it("derives the cutoff by pure UTC millisecond arithmetic (host timezone cannot leak in)", () => {
+		// toISOString() is always UTC: a local-timezone calendar subtraction
+		// (setDate) would shift the string on non-UTC hosts. Fixed strings.
+		const now = new Date("2026-10-20T03:17:00.000Z");
+		expect(retentionCutoffIso(now, 30)).toBe("2026-09-20T03:17:00.000Z");
+		expect(retentionCutoffIso(now, 0)).toBe("2026-10-20T03:17:00.000Z");
+		// Crosses a month and a year boundary.
+		expect(retentionCutoffIso(new Date("2027-01-05T00:00:00.000Z"), 30)).toBe(
+			"2026-12-06T00:00:00.000Z",
+		);
+	});
+});
+
+describe("rollupRecentMissing", () => {
+	const now = new Date("2026-10-20T03:17:00.000Z");
+	// Scan window: [2026-10-13, 2026-10-19] — today (10-20) excluded.
+
+	it("rolls only the missing days and never writes the present ones", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		const batches: BatchRecord[] = [];
+		const db = wrapD1(real, { onBatch: (rec) => batches.push(rec) });
+
+		const window = [
+			"2026-10-13",
+			"2026-10-14",
+			"2026-10-15",
+			"2026-10-16",
+			"2026-10-17",
+			"2026-10-18",
+			"2026-10-19",
+		];
+		for (const date of window) {
+			insertLog(sqlite, { created_at: `${date}T12:00:00.000Z` });
+		}
+		// Five days already rolled. Marker value 99: a wrongful re-roll would
+		// rewrite the row from raw (requests = 1) and destroy the marker.
+		for (const date of [
+			"2026-10-13",
+			"2026-10-14",
+			"2026-10-16",
+			"2026-10-17",
+			"2026-10-19",
+		]) {
+			sqlite
+				.prepare(
+					"INSERT INTO usage_stats_daily (id, stat_date, model, requests) VALUES (?, ?, 'm1', 99)",
+				)
+				.run(`r_${++seq}`, date);
+		}
+		// Today's raw rows exist but stay out of the scan window.
+		insertLog(sqlite, { created_at: "2026-10-20T01:00:00.000Z" });
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const rolled = await rollupRecentMissing(db, now);
+
+		expect(rolled).toEqual(["2026-10-15", "2026-10-18"]);
+		// Exactly one write batch per missing day — present days are pure
+		// probe hits with zero write calls.
+		expect(batches).toHaveLength(2);
+		expect(batches.every((b) => b.bound[0][0] !== "2026-10-13")).toBe(true);
+		// The two missing days got real rollup rows from their raw logs.
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date IN ('2026-10-15', '2026-10-18') AND requests = 1",
+			),
+		).toBe(2);
+		// Present days untouched: all five 99 markers survive.
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE requests = 99",
+			),
+		).toBe(5);
+		// Today never gets a rollup row from the scan.
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-20'",
+			),
+		).toBe(0);
+		const scanLog = logSpy.mock.calls.find(
+			(c) => c[0] === "[rollup] backfill scan done",
+		);
+		expect(scanLog?.[1]).toEqual({ scanned: 7, missing: 2, rolled: 2 });
+	});
+
+	it("skips days whose raw logs are gone but whose rollup survives (probe short-circuit)", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		const batches: BatchRecord[] = [];
+		const prepares: string[] = [];
+		const db = wrapD1(real, {
+			onBatch: (rec) => batches.push(rec),
+			onPrepare: (sql) => prepares.push(sql),
+		});
+
+		// No raw logs at all — every window day carries a surviving rollup row
+		// (the retention-pruned state the anti-loss guard protects).
+		for (const date of [
+			"2026-10-13",
+			"2026-10-14",
+			"2026-10-15",
+			"2026-10-16",
+			"2026-10-17",
+			"2026-10-18",
+			"2026-10-19",
+		]) {
+			insertRollupRow(sqlite, date);
+		}
+
+		const rolled = await rollupRecentMissing(db, now);
+		expect(rolled).toEqual([]);
+		// Probe hits must short-circuit before rollupDate: zero guard COUNT
+		// queries and zero write batches.
+		expect(batches).toHaveLength(0);
+		expect(
+			prepares.filter((sql) => sql.includes("COUNT(*)")),
+		).toHaveLength(0);
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_stats_daily"),
+		).toBe(7);
+	});
+
+	it("keeps scanning after a single day fails and logs the failure per date", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		insertLog(sqlite, { created_at: "2026-10-15T12:00:00.000Z" });
+		insertLog(sqlite, { created_at: "2026-10-18T12:00:00.000Z" });
+		// Present days carry rollup rows; only 10-15 and 10-18 are missing.
+		for (const date of [
+			"2026-10-13",
+			"2026-10-14",
+			"2026-10-16",
+			"2026-10-17",
+			"2026-10-19",
+		]) {
+			insertRollupRow(sqlite, date);
+		}
+		// Fail the rollup batch of the earlier missing day only; the probe of
+		// every other day must still succeed.
+		const db = wrapD1(real, {
+			failBatchIf: (rec) =>
+				rec.sqls[0].includes("DELETE FROM usage_stats_daily") &&
+				rec.bound[0][0] === "2026-10-15",
+		});
+
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const rolled = await rollupRecentMissing(db, now);
+
+		// The second missing day still rolled.
+		expect(rolled).toEqual(["2026-10-18"]);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-18'",
+			),
+		).toBe(1);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '2026-10-15'",
+			),
+		).toBe(0);
+		// Failure logged with the per-date payload.
+		const failure = errSpy.mock.calls.find(
+			(c) => c[0] === "[rollup] backfill failed",
+		);
+		expect(failure?.[1]).toMatchObject({ date: "2026-10-15" });
+		const scanLog = logSpy.mock.calls.find(
+			(c) => c[0] === "[rollup] backfill scan done",
+		);
+		expect(scanLog?.[1]).toEqual({ scanned: 7, missing: 2, rolled: 1 });
+	});
+});
+
+describe("rollupMissingDates", () => {
+	const now = new Date("2026-10-20T03:17:00.000Z");
+
+	it("returns exactly the unrolled days between the raw floor and yesterday", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		for (const date of ["2026-10-17", "2026-10-18", "2026-10-19"]) {
+			insertLog(sqlite, { created_at: `${date}T12:00:00.000Z` });
+		}
+		// Today's raw row never joins the enumeration window.
+		insertLog(sqlite, { created_at: "2026-10-20T09:00:00.000Z" });
+		insertRollupRow(sqlite, "2026-10-17");
+		insertRollupRow(sqlite, "2026-10-19");
+
+		expect(await rollupMissingDates(db, now)).toEqual(["2026-10-18"]);
+	});
+
+	it("returns an empty list when the raw table is empty", async () => {
+		const sqlite = createSqlite();
+		insertRollupRow(sqlite, "2026-10-18");
+		expect(await rollupMissingDates(makeD1(sqlite), now)).toEqual([]);
 	});
 });
 
@@ -866,10 +1167,11 @@ describe("pruneRollup", () => {
 // ---------------------------------------------------------------------------
 
 describe("runDailyMaintenance", () => {
-	it("rolls up yesterday, prunes expired logs/sessions/rollups", async () => {
+	const now = new Date("2026-10-20T03:17:00.000Z");
+
+	it("backfills yesterday via the scan window, prunes expired logs/sessions/rollups", async () => {
 		const sqlite = createSqlite();
 		const db = makeD1(sqlite);
-		const now = new Date();
 		const today = utcDateOf(now.toISOString());
 		const yesterday = addUtcDays(today, -1);
 
@@ -877,9 +1179,10 @@ describe("runDailyMaintenance", () => {
 			total_tokens: 5,
 			created_at: `${yesterday}T12:00:00.000Z`,
 		});
+		// 40 days old → past the 30d default retention cutoff (09-20).
 		insertLog(sqlite, {
 			total_tokens: 5,
-			created_at: new Date(now.getTime() - 40 * 86_400_000).toISOString(),
+			created_at: "2026-09-10T12:00:00.000Z",
 		});
 		insertRollupRow(sqlite, addUtcDays(today, -200));
 		sqlite
@@ -898,16 +1201,10 @@ describe("runDailyMaintenance", () => {
 			),
 		).toBe(1);
 		expect(
-			countRows(
-				sqlite,
-				"SELECT COUNT(*) AS c FROM usage_logs",
-			),
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
 		).toBe(1);
 		expect(
-			countRows(
-				sqlite,
-				"SELECT COUNT(*) AS c FROM admin_sessions",
-			),
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM admin_sessions"),
 		).toBe(0);
 		expect(
 			countRows(
@@ -915,6 +1212,80 @@ describe("runDailyMaintenance", () => {
 				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -200)}'`,
 			),
 		).toBe(0);
+	});
+
+	it("backfills two missing days and warns (not errors) on an incomplete retention prune", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		// Retention DELETEs execute for real but always report a full chunk,
+		// so the round fuse trips deterministically (180 × 5000).
+		const db = wrapD1(real, {
+			fakeChangesIf: (sql) =>
+				sql.includes("DELETE FROM usage_logs WHERE rowid IN")
+					? 5000
+					: undefined,
+		});
+		// Two window days missing rollup rows (with raw), five present
+		// (marker 99), plus one 40d-old raw row for the retention step.
+		insertLog(sqlite, {
+			total_tokens: 5,
+			created_at: "2026-10-15T12:00:00.000Z",
+		});
+		insertLog(sqlite, {
+			total_tokens: 5,
+			created_at: "2026-10-18T12:00:00.000Z",
+		});
+		insertLog(sqlite, {
+			total_tokens: 5,
+			created_at: "2026-09-10T12:00:00.000Z",
+		});
+		for (const date of [
+			"2026-10-13",
+			"2026-10-14",
+			"2026-10-16",
+			"2026-10-17",
+			"2026-10-19",
+		]) {
+			sqlite
+				.prepare(
+					"INSERT INTO usage_stats_daily (id, stat_date, model, requests) VALUES (?, ?, 'm1', 99)",
+				)
+				.run(`r_${++seq}`, date);
+		}
+
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runDailyMaintenance(db, now);
+
+		// Both missing days backfilled from raw; the five present untouched.
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date IN ('2026-10-15', '2026-10-18') AND requests = 1",
+			),
+		).toBe(2);
+		expect(
+			countRows(
+				sqlite,
+				"SELECT COUNT(*) AS c FROM usage_stats_daily WHERE requests = 99",
+			),
+		).toBe(5);
+		// Fuse tripped → warn with complete=false; the chain continued and the
+		// old raw row was really deleted across the fake-full rounds.
+		const warn = warnSpy.mock.calls.find(
+			(c) => c[0] === "[retention] usage_logs pruned",
+		);
+		expect(warn?.[1]).toMatchObject({ retentionDays: 30, complete: false });
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(2);
+		const scanLog = logSpy.mock.calls.find(
+			(c) => c[0] === "[rollup] backfill scan done",
+		);
+		expect(scanLog?.[1]).toEqual({ scanned: 7, missing: 2, rolled: 2 });
+		expect(errSpy).not.toHaveBeenCalled();
 	});
 
 	it("keeps running the remaining steps when one step fails", async () => {
@@ -959,6 +1330,59 @@ describe("runDailyMaintenance", () => {
 // ---------------------------------------------------------------------------
 // Endpoint unions (Hono apps against the sqlite adapter)
 // ---------------------------------------------------------------------------
+
+describe("usage prune endpoint (POST /prune)", () => {
+	it("responds { deleted, complete } and prunes past the shared cutoff", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		// The endpoint derives its cutoff from the live clock (now − 30d
+		// default retention): 40d-old rows are unconditionally past it and
+		// fresh rows unconditionally safe, so the assertions stay fixed.
+		for (let i = 0; i < 3; i++) {
+			insertLog(sqlite, {
+				created_at: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+			});
+		}
+		for (let i = 0; i < 2; i++) {
+			insertLog(sqlite, { created_at: new Date().toISOString() });
+		}
+
+		const res = await usageRoutes.request(
+			"/prune",
+			{ method: "POST" },
+			{ DB: db },
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ deleted: 3, complete: true });
+		expect(
+			countRows(sqlite, "SELECT COUNT(*) AS c FROM usage_logs"),
+		).toBe(2);
+	});
+
+	it("reports incomplete without failing when the round fuse trips", async () => {
+		const sqlite = createSqlite();
+		const real = makeD1(sqlite);
+		// Every retention round reports a full chunk → the fuse runs out
+		// (180 rounds × 5000 rows) and the endpoint must still answer 200.
+		const db = wrapD1(real, {
+			fakeChangesIf: (sql) =>
+				sql.includes("DELETE FROM usage_logs WHERE rowid IN")
+					? 5000
+					: undefined,
+		});
+		insertLog(sqlite, {
+			created_at: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+		});
+
+		const res = await usageRoutes.request(
+			"/prune",
+			{ method: "POST" },
+			{ DB: db },
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ deleted: 900_000, complete: false });
+	});
+});
 
 describe("dashboard endpoint (rollup + raw union)", () => {
 	it("returns the same numbers as the raw-only query after rollup", async () => {
@@ -1054,14 +1478,19 @@ describe("dashboard endpoint (rollup + raw union)", () => {
 			),
 		).toBe(1);
 
-		// Backfill covers dates missing a rollup (here: only `today` remains).
+		// Backfill enumerates [min raw day, yesterday] minus the rolled set:
+		// today's fresh raw row stays out (readers never read stat_date =
+		// today — the next cron scan rebuilds it), and hole days inside the
+		// range (yesterday here, no raw rows) join the missing set.
 		insertLog(sqlite, { created_at: new Date().toISOString() });
 		const backfill = await dashboardRoutes.request(
 			"/rollup",
 			{ method: "POST", body: JSON.stringify({}) },
 			{ DB: db },
 		);
-		expect(await backfill.json()).toEqual({ rolled: [today] });
+		expect(await backfill.json()).toEqual({
+			rolled: [addUtcDays(today, -1)],
+		});
 	});
 });
 
