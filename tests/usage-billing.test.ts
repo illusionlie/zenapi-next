@@ -4,8 +4,16 @@ import { recordUsage } from "../apps/worker/src/services/usage";
 
 type RecordedStmt = { sql: string; args: unknown[] };
 
-function makeDb(opts: { batchRejects?: unknown } = {}) {
+/**
+ * Fake D1: the first `rejectFirst` batch calls reject with `rejectReason`
+ * (default 0 → every call succeeds); later calls succeed. Deterministic —
+ * tests pass `retryDelayMs: 0` so no real timer is ever awaited.
+ */
+function makeDb(
+	opts: { rejectFirst?: number; rejectReason?: unknown } = {},
+) {
 	const batchCalls: RecordedStmt[][] = [];
+	let rejectedCount = 0;
 	const db = {
 		prepare(sql: string) {
 			const stmt = {
@@ -20,14 +28,20 @@ function makeDb(opts: { batchRejects?: unknown } = {}) {
 			return stmt;
 		},
 		batch: async (stmts: Array<{ sql: string; boundArgs: unknown[] }>) => {
-			if (opts.batchRejects !== undefined) {
-				throw opts.batchRejects;
+			const callNo = batchCalls.length + rejectedCount + 1;
+			if (callNo <= (opts.rejectFirst ?? 0)) {
+				rejectedCount += 1;
+				throw opts.rejectReason ?? new Error("d1 batch boom");
 			}
 			batchCalls.push(stmts.map((s) => ({ sql: s.sql, args: s.boundArgs })));
 			return stmts.map(() => ({}));
 		},
 	};
-	return { db: db as unknown as D1Database, batchCalls };
+	return {
+		db: db as unknown as D1Database,
+		batchCalls,
+		batchAttemptCount: () => batchCalls.length + rejectedCount,
+	};
 }
 
 afterEach(() => {
@@ -51,6 +65,7 @@ describe("recordUsage - billing batch assembly", () => {
 		// Success path must stay silent (failure visibility is for failures only).
 		expect(errSpy).not.toHaveBeenCalled();
 
+		// R3 不变式：成功路径恰一次 batch 调用（重试不预支延迟，也不多发请求）。
 		expect(batchCalls).toHaveLength(1);
 		const stmts = batchCalls[0];
 		expect(stmts).toHaveLength(3);
@@ -127,34 +142,87 @@ describe("recordUsage - billing batch assembly", () => {
 		expect(batchCalls[0][1].sql).toContain("UPDATE tokens SET quota_used");
 	});
 
-	it("logs with [usage] context and resolves (no throw) when the batch fails", async () => {
+	it("absorbs a transient batch failure via the single delayed retry", async () => {
 		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-		const { db, batchCalls } = makeDb({
-			batchRejects: new Error("d1 batch boom"),
+		const { db, batchCalls, batchAttemptCount } = makeDb({
+			rejectFirst: 1,
+		});
+
+		await expect(
+			recordUsage(
+				db,
+				{
+					tokenId: "tok_1",
+					userId: "user_1",
+					totalTokens: 5,
+					cost: 1,
+				},
+				{ retryDelayMs: 0 },
+			),
+		).resolves.toBeUndefined();
+
+		// 瞬时抖动被重试吃掉：无失败日志。
+		expect(errSpy).not.toHaveBeenCalled();
+		// 首次失败 + 重放成功 = 恰两次 batch 尝试。
+		expect(batchAttemptCount()).toBe(2);
+		expect(batchCalls).toHaveLength(1);
+		// 重放的是同一 statements：三写（INSERT + quota + balance）完整落账。
+		const stmts = batchCalls[0];
+		expect(stmts).toHaveLength(3);
+		expect(stmts[0].sql).toContain("INSERT INTO usage_logs");
+		expect(stmts[1].sql).toContain("UPDATE tokens SET quota_used");
+		expect(stmts[2].sql).toContain("UPDATE users SET balance");
+	});
+
+	it("logs with [usage] context and resolves (no throw) when both attempts fail", async () => {
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { db, batchCalls, batchAttemptCount } = makeDb({
+			rejectFirst: 2,
 		});
 
 		// 计费收尾失败不 rethrow：上游响应已成功，调用方 promise 正常 resolve。
 		await expect(
-			recordUsage(db, {
-				tokenId: "tok_1",
-				userId: "user_1",
-				totalTokens: 5,
-				cost: 1,
-			}),
+			recordUsage(
+				db,
+				{
+					tokenId: "tok_1",
+					userId: "user_1",
+					channelId: "ch_7",
+					model: "gpt-4o",
+					requestPath: "/v1/chat/completions",
+					totalTokens: 120,
+					promptTokens: 100,
+					completionTokens: 20,
+					cost: 1,
+					status: "ok",
+				},
+				{ retryDelayMs: 0 },
+			),
 		).resolves.toBeUndefined();
 
 		expect(errSpy).toHaveBeenCalledTimes(1);
 		const [label, payload] = errSpy.mock.calls[0] as [string, unknown];
+		// tag 字面是告警签名锚点，不得变动。
 		expect(label).toBe("[usage] billing batch failed");
+		// R2 可对账载荷：仅凭该行即可离线重建 usage_logs 统计行。
 		expect(payload).toMatchObject({
 			tokenId: "tok_1",
 			userId: "user_1",
 			cost: 1,
+			model: "gpt-4o",
+			channelId: "ch_7",
+			requestPath: "/v1/chat/completions",
+			promptTokens: 100,
+			completionTokens: 20,
+			totalTokens: 120,
+			status: "ok",
+			attempts: 2,
 		});
 		expect(String((payload as { error: unknown }).error)).toContain(
 			"d1 batch boom",
 		);
-		// 失败发生在 batch 内部，模拟的提交从未成功落账。
+		// 两次尝试都发生在 batch 内部，模拟的提交从未成功落账。
+		expect(batchAttemptCount()).toBe(2);
 		expect(batchCalls).toHaveLength(0);
 	});
 });

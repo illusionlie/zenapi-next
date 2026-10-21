@@ -3,7 +3,7 @@
 	"name": "billing-retry-fields",
 	"title": "计费 batch 失败单次重试与可对账日志",
 	"description": "",
-	"status": "planning",
+	"status": "in_progress",
 	"dev_type": null,
 	"scope": null,
 	"package": null,

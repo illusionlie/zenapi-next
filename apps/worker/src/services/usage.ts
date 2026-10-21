@@ -23,14 +23,29 @@ export type UsageInput = {
 	errorMessage?: string | null;
 };
 
+/** Max batch attempts: the initial call plus exactly one delayed retry. */
+const BILLING_BATCH_MAX_ATTEMPTS = 2;
+const BILLING_RETRY_DELAY_MS = 250;
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Inserts a usage record and settles billing (token quota + user balance) in a
  * single D1 batch, which executes atomically: a mid-batch failure rolls back
  * everything, so there is never a "logged but not billed" intermediate state.
+ *
+ * A failed batch is retried once after `opts.retryDelayMs` (default 250ms):
+ * D1 transient hiccups (overloaded / dropped connection) make up most batch
+ * failures, and because the failed batch rolled back entirely, replaying the
+ * same statements carries no half-state risk. The success path pays zero
+ * extra latency — exactly one batch call, no delay.
  */
 export async function recordUsage(
 	db: D1Database,
 	input: UsageInput,
+	opts: { retryDelayMs?: number } = {},
 ): Promise<void> {
 	const id = crypto.randomUUID();
 	const createdAt = nowIso();
@@ -97,19 +112,40 @@ export async function recordUsage(
 		);
 	}
 
-	try {
-		await db.batch(statements);
-	} catch (e) {
-		// Billing is a post-response epilogue: the upstream response already
-		// succeeded, so rethrowing cannot help the client. But it must stay
-		// visible — log with context instead of swallowing silently.
-		console.error("[usage] billing batch failed", {
-			tokenId: input.tokenId,
-			userId: input.userId,
-			cost: input.cost,
-			error: String(e),
-		});
+	const retryDelayMs = opts.retryDelayMs ?? BILLING_RETRY_DELAY_MS;
+	let attempts = 0;
+	let lastError: unknown = null;
+	while (attempts < BILLING_BATCH_MAX_ATTEMPTS) {
+		if (attempts > 0) {
+			await delay(retryDelayMs);
+		}
+		attempts += 1;
+		try {
+			await db.batch(statements);
+			return;
+		} catch (e) {
+			lastError = e;
+		}
 	}
+	// Billing is a post-response epilogue: the upstream response already
+	// succeeded, so rethrowing cannot help the client. But it must stay
+	// visible — log with context instead of swallowing silently. The payload
+	// carries the full accounting shape (model / channel / tokens / status)
+	// so a Logpush-sink failure line can rebuild the lost stats row offline.
+	console.error("[usage] billing batch failed", {
+		tokenId: input.tokenId,
+		userId: input.userId,
+		cost: input.cost,
+		model: input.model,
+		channelId: input.channelId,
+		requestPath: input.requestPath,
+		promptTokens: input.promptTokens,
+		completionTokens: input.completionTokens,
+		totalTokens: input.totalTokens,
+		status: input.status,
+		attempts,
+		error: String(lastError),
+	});
 }
 
 /**
