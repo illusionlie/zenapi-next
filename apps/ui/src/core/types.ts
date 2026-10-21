@@ -55,14 +55,23 @@ export type UsageLog = {
 	token_name?: string | null;
 	user_name?: string | null;
 	user_email?: string | null;
+	request_path?: string | null;
 	total_tokens: number | null;
 	prompt_tokens?: number | null;
 	completion_tokens?: number | null;
+	/** 缓存命中输入 tokens（NULL = 上游未报告） */
+	cached_input_tokens?: number | null;
+	/** 缓存写入 tokens，仅 Anthropic 语义（NULL = 上游未报告） */
+	cache_creation_tokens?: number | null;
 	cost?: number | null;
 	latency_ms: number | null;
 	first_token_latency_ms?: number | null;
 	stream?: boolean | number | null;
 	reasoning_effort?: string | number | null;
+	/** 上游 HTTP 状态码（NULL = 未记录） */
+	error_code?: number | null;
+	/** 上游错误响应体前 512 字符原文，可能为 JSON 或纯文本（NULL = 无错误） */
+	error_message?: string | null;
 	status: string;
 	created_at: string;
 };
