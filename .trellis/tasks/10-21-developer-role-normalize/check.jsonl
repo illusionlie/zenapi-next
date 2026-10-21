@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "后端质量门禁:check/typecheck/test 与 Biome 规则"}
+{"file": ".trellis/spec/api-worker-ui/frontend/quality-guidelines.md", "reason": "UI 质量门禁"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "核对布尔键契约遵循:读宽写严/GET 直读表单真相/Tests Required"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "核对归一化纯函数不变量:不碰内容/不合并/不动 tool,与 hoist 语义边界清晰"}

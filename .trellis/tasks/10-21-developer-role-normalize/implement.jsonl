@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "settings 布尔键契约:三级回退链/读宽写严/GET 表单真相/30s TTL——新键 normalize_developer_role 镜像 debug_request_body_log 模式(无 env 回退的两级退化)"}
+{"file": ".trellis/spec/api-worker/backend/proxy-headers.md", "reason": "settings 新增配置项标准链路与热路径头策略契约;buildChannelRequest 伪装注入点与此任务归一化落点同一 bodyCopy 模式"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "后端门禁:check/typecheck/test 全绿、Biome tab/双引号、services 下沉"}
+{"file": ".trellis/spec/api-worker-ui/frontend/component-guidelines.md", "reason": "SettingsView checkbox 样板接线(types/constants/AdminApp loadSettings/submit 四处最小改动)"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "转换器契约与 developer hoist 先例(openaiToAnthropicRequest/convertResponsesInputItem);新归一化纯函数需遵循纯函数/不变量风格并注明语义差异"}
