@@ -16,7 +16,8 @@
  * - recordChannelFailure — once per channel per request, at the channel
  *   abandonment point (key loop exhausted with the last failure retryable, or
  *   a network error). Not per key / per response, so one request cannot
- *   black-hole a hot channel by itself.
+ *   black-hole a hot channel by itself. Streaks decay over time: failures
+ *   spaced more than COOLDOWN_STREAK_RESET_MS apart start a fresh streak.
  * - recordChannelSuccess — the channel returned any HTTP response that proves
  *   it is alive (an ok response, or a non-retryable 4xx). Clears the streak
  *   immediately: a recovered channel serves again without waiting out the
@@ -29,8 +30,19 @@ export const COOLDOWN_FAILURE_THRESHOLD = 3;
 /** How long a channel stays out of the candidate pool once cooling. */
 export const COOLDOWN_DURATION_MS = 60_000;
 
+/**
+ * Streak decay window: a failure arriving more than this long after the
+ * previous one starts a fresh streak (consecutiveFailures reset to 1), so
+ * "N consecutive failures" means failures clustered in time — not an
+ * isolate-lifetime accumulator (2 flukes yesterday + 1 blip today must not
+ * cool the channel). Independent of the 60s cooldown window.
+ */
+export const COOLDOWN_STREAK_RESET_MS = 300_000;
+
 type CooldownState = {
 	consecutiveFailures: number;
+	/** Epoch ms of the streak's latest failure (decays the streak when stale). */
+	lastFailureAt: number;
 	/** Epoch ms; 0 = below threshold, never cooling. */
 	cooldownUntil: number;
 };
@@ -43,17 +55,30 @@ const cooldownStates = new Map<string, CooldownState>();
  * Records one retryable channel failure. When the consecutive-failure count
  * reaches COOLDOWN_FAILURE_THRESHOLD (or beyond — a fail-open retry of an
  * already-cooling channel that fails again) the channel cools down for
- * COOLDOWN_DURATION_MS from `now`.
+ * COOLDOWN_DURATION_MS from `now`. Failures spaced more than
+ * COOLDOWN_STREAK_RESET_MS apart start a fresh streak (reset to 1); a
+ * fail-open retry of a cooling channel always lands within its 60s window,
+ * far inside the decay gap, so streak decay can never clear an active
+ * cooldown.
  */
 export function recordChannelFailure(channelId: string, now?: number): void {
 	const nowMs = now ?? Date.now();
 	const state = cooldownStates.get(channelId);
-	const consecutiveFailures = (state?.consecutiveFailures ?? 0) + 1;
+	const lastFailureAt = state?.lastFailureAt ?? 0;
+	const streakExpired =
+		lastFailureAt > 0 && nowMs - lastFailureAt > COOLDOWN_STREAK_RESET_MS;
+	const consecutiveFailures = streakExpired
+		? 1
+		: (state?.consecutiveFailures ?? 0) + 1;
 	const cooldownUntil =
 		consecutiveFailures >= COOLDOWN_FAILURE_THRESHOLD
 			? nowMs + COOLDOWN_DURATION_MS
 			: 0;
-	cooldownStates.set(channelId, { consecutiveFailures, cooldownUntil });
+	cooldownStates.set(channelId, {
+		consecutiveFailures,
+		lastFailureAt: nowMs,
+		cooldownUntil,
+	});
 }
 
 /**

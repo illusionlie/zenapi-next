@@ -55,19 +55,25 @@ app.use("*", async (c, next) => {
 		let bodyKeys: string[] = [];
 		let bodySize = 0;
 		try {
-			const payload = await raw.json();
-			bodyType = "json";
-			if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-				bodyKeys = Object.keys(payload);
-			}
-		} catch {
+			// Fetch spec: json() consumes the body internally (text → JSON.parse),
+			// so a failed parse leaves nothing for a text() fallback on the same
+			// clone — the old fallback was dead code and non-JSON bodies always
+			// degraded to "unreadable". Read text once, then JSON.parse here:
+			// non-JSON bodies (plain text / form) keep their body_size instead.
+			const text = await raw.text();
 			try {
-				const text = await raw.text();
+				const payload = JSON.parse(text);
+				bodyType = "json";
+				if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+					bodyKeys = Object.keys(payload);
+				}
+			} catch {
 				bodyType = "text";
 				bodySize = text.length;
-			} catch {
-				bodyType = "unreadable";
 			}
+		} catch {
+			// The stream itself failed to read (rare) — nothing usable at all.
+			bodyType = "unreadable";
 		}
 		console.log("[request]", {
 			method,

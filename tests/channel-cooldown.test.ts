@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	COOLDOWN_DURATION_MS,
 	COOLDOWN_FAILURE_THRESHOLD,
+	COOLDOWN_STREAK_RESET_MS,
 	filterCoolingChannels,
 	isChannelCoolingDown,
 	recordChannelFailure,
@@ -132,6 +133,70 @@ describe("cooldown state machine", () => {
 		recordChannelFailure("ch-now");
 		expect(isChannelCoolingDown("ch-now")).toBe(true);
 		expect(isChannelCoolingDown("ch-other")).toBe(false);
+	});
+});
+
+describe("streak time decay (COOLDOWN_STREAK_RESET_MS)", () => {
+	it("exposes the 5-minute streak reset constant", () => {
+		expect(COOLDOWN_STREAK_RESET_MS).toBe(300_000);
+	});
+
+	it("stale streaks decay: failures spaced beyond the window start a fresh count", () => {
+		// motivating bug: 昨天 2 次偶发 429 + 今天 1 次瞬时 502 不得触发冷却
+		recordChannelFailure("ch1", 1_000);
+		recordChannelFailure("ch1", 2_000);
+		const today = 2_000 + COOLDOWN_STREAK_RESET_MS + 1;
+		recordChannelFailure("ch1", today);
+		expect(isChannelCoolingDown("ch1", today)).toBe(false);
+	});
+
+	it("a 6-minute gap before the third failure restarts the count", () => {
+		recordChannelFailure("ch1", 0);
+		recordChannelFailure("ch1", 60_000);
+		const thirdAt = 60_000 + 360_000; // 6 min > 5 min window → streak resets to 1
+		recordChannelFailure("ch1", thirdAt);
+		expect(isChannelCoolingDown("ch1", thirdAt)).toBe(false);
+		// 重新计数：重置后的 streak 需要再积累满阈值才冷却
+		recordChannelFailure("ch1", thirdAt + 1_000);
+		expect(isChannelCoolingDown("ch1", thirdAt + 1_000)).toBe(false);
+		recordChannelFailure("ch1", thirdAt + 2_000);
+		expect(isChannelCoolingDown("ch1", thirdAt + 2_000)).toBe(true);
+	});
+
+	it("within-window failures still accumulate: 4-minute gaps stay consecutive", () => {
+		// 4 min < 5 min 衰减窗 → 仍属同一 streak，第 3 次失败照常触发冷却。
+		// PRD 验收「间隔 4 分钟不触发」与要求节公式（> 300_000 才重置）算术上
+		// 矛盾（240_000 < 300_000），按钉死的公式语义断言，见实现报告。
+		recordChannelFailure("ch1", 0);
+		recordChannelFailure("ch1", 240_000);
+		recordChannelFailure("ch1", 480_000);
+		expect(isChannelCoolingDown("ch1", 480_000)).toBe(true);
+	});
+
+	it("back-to-back triple failure still cools down (in-window fast path)", () => {
+		for (const t of [1_000, 2_000, 3_000]) {
+			recordChannelFailure("ch1", t);
+		}
+		expect(isChannelCoolingDown("ch1", 3_000)).toBe(true);
+	});
+
+	it("boundary: a gap exactly at the window does not reset (strict >)", () => {
+		recordChannelFailure("ch1", 0);
+		recordChannelFailure("ch1", COOLDOWN_STREAK_RESET_MS);
+		recordChannelFailure("ch1", COOLDOWN_STREAK_RESET_MS + 1);
+		// 两个间隔都恰好等于窗口（不严格大于）→ streak 1,2,3 → 冷却
+		expect(isChannelCoolingDown("ch1", COOLDOWN_STREAK_RESET_MS + 1)).toBe(
+			true,
+		);
+	});
+
+	it("a success followed by a long gap behaves like a fresh channel", () => {
+		recordChannelFailure("ch1", 1_000);
+		recordChannelSuccess("ch1");
+		const muchLater = 1_000 + COOLDOWN_STREAK_RESET_MS * 10;
+		recordChannelFailure("ch1", muchLater);
+		recordChannelFailure("ch1", muchLater + 1_000);
+		expect(isChannelCoolingDown("ch1", muchLater + 1_000)).toBe(false);
 	});
 });
 

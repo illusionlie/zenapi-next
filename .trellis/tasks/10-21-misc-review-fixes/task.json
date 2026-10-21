@@ -3,7 +3,7 @@
 	"name": "misc-review-fixes",
 	"title": "评审杂项：debug 日志回退死代码 / 管理台读缓存 / 冷却衰减",
 	"description": "",
-	"status": "planning",
+	"status": "in_progress",
 	"dev_type": null,
 	"scope": null,
 	"package": null,

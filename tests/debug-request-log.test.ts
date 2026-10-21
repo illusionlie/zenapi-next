@@ -5,6 +5,7 @@ import settingsApp from "../apps/worker/src/routes/settings";
 import {
 	DEBUG_REQUEST_BODY_LOG_KEY,
 	loadDebugLogFlag,
+	loadDebugLogFlagDirect,
 	resolveDebugLogFlag,
 	setDebugRequestBodyLog,
 } from "../apps/worker/src/services/settings";
@@ -185,6 +186,83 @@ describe("[request] middleware — debug flag on", () => {
 		expect(logs[0].body_keys).toEqual(["model", "messages"]);
 	});
 
+	it("non-JSON text bodies report body_type text with a real size (dead fallback revived)", async () => {
+		// 回归（F1）：raw.json() 按 Fetch 规范先消费 body 再 parse，旧代码在
+		// 同一 clone 上回退 raw.text() 必抛 Body is unusable → 非 JSON body
+		// 恒为 unreadable 且拿不到 body_size
+		const { env } = makeWorkerEnv(
+			settingRows({ [DEBUG_REQUEST_BODY_LOG_KEY]: "true" }),
+		);
+		const logSpy = vi
+			.spyOn(console, "log")
+			.mockImplementation(() => {});
+
+		const res = await worker.fetch(
+			new Request(PROBE_PATH, {
+				method: "POST",
+				headers: { "content-type": "text/plain" },
+				body: "not json at all",
+			}),
+			env,
+		);
+
+		expect(res.status).toBe(404);
+		const logs = countRequestLogs(logSpy);
+		expect(logs).toHaveLength(1);
+		expect(logs[0].body_type).toBe("text");
+		expect(logs[0].body_size).toBe("not json at all".length);
+		expect(logs[0].body_keys).toEqual([]);
+	});
+
+	it("form-urlencoded bodies also report text with a real size", async () => {
+		const { env } = makeWorkerEnv(
+			settingRows({ [DEBUG_REQUEST_BODY_LOG_KEY]: "true" }),
+		);
+		const logSpy = vi
+			.spyOn(console, "log")
+			.mockImplementation(() => {});
+
+		await worker.fetch(
+			new Request(PROBE_PATH, {
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				body: "grant_type=client_credentials&scope=read",
+			}),
+			env,
+		);
+
+		const logs = countRequestLogs(logSpy);
+		expect(logs).toHaveLength(1);
+		expect(logs[0].body_type).toBe("text");
+		expect(logs[0].body_size).toBe(
+			"grant_type=client_credentials&scope=read".length,
+		);
+	});
+
+	it("JSON bodies keep the legacy shape (json + body_keys, size stays 0)", async () => {
+		const { env } = makeWorkerEnv(
+			settingRows({ [DEBUG_REQUEST_BODY_LOG_KEY]: "true" }),
+		);
+		const logSpy = vi
+			.spyOn(console, "log")
+			.mockImplementation(() => {});
+
+		await worker.fetch(
+			new Request(PROBE_PATH, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ model: "gpt-x", stream: true }),
+			}),
+			env,
+		);
+
+		const logs = countRequestLogs(logSpy);
+		expect(logs).toHaveLength(1);
+		expect(logs[0].body_type).toBe("json");
+		expect(logs[0].body_keys).toEqual(["model", "stream"]);
+		expect(logs[0].body_size).toBe(0);
+	});
+
 	it("env DEBUG_REQUEST_BODY_LOG truthy restores the full form without settings", async () => {
 		const { env } = makeWorkerEnv([], { DEBUG_REQUEST_BODY_LOG: "1" });
 		const cloneSpy = vi.spyOn(Request.prototype, "clone");
@@ -257,6 +335,30 @@ describe("loadDebugLogFlag — fallback chain + TTL cache", () => {
 		expect(await loadDebugLogFlag(db)).toBe(true);
 		expect(prepareCount()).toBe(1);
 	});
+
+	it("loadDebugLogFlagDirect re-reads on every call (admin form truth, no memoization)", async () => {
+		// makeDb 闭包按引用捕获 rows，原地改值即生效
+		const rows = settingRows({ [DEBUG_REQUEST_BODY_LOG_KEY]: "false" });
+		const { db, prepareCount } = makeDb(rows);
+
+		expect(await loadDebugLogFlagDirect(db)).toBe(false);
+		rows[0].value = "true";
+		expect(await loadDebugLogFlagDirect(db)).toBe(true);
+		expect(prepareCount()).toBe(2); // 每次调用都打 DB，不经 TTL 缓存
+	});
+
+	it("loadDebugLogFlagDirect keeps the same fallback-chain semantics", async () => {
+		expect(
+			await loadDebugLogFlagDirect(
+				makeDb(settingRows({ [DEBUG_REQUEST_BODY_LOG_KEY]: "false" })).db,
+				{ debugRequestLog: "1" },
+			),
+		).toBe(false); // settings 优先于 env
+		expect(
+			await loadDebugLogFlagDirect(makeDb([]).db, { debugRequestLog: "yes" }),
+		).toBe(true); // 缺失 → env 回退
+		expect(await loadDebugLogFlagDirect(makeDb([]).db)).toBe(false); // 双缺 → 默认
+	});
 });
 
 describe("resolveDebugLogFlag — pure resolver matrix", () => {
@@ -300,6 +402,55 @@ describe("settings route — debug_request_body_log CRUD", () => {
 		return { env: { DB: db } as unknown as RequestEnv, runs };
 	}
 
+	/** 可变 settings mock：run() 对 INSERT INTO settings 真实 upsert 进 rows。 */
+	function makeMutableSettingsDb(rows: SettingRow[] = []) {
+		const db = {
+			prepare(sql: string) {
+				const stmt = {
+					boundArgs: [] as unknown[],
+					bind: (...args: unknown[]) => {
+						stmt.boundArgs = args;
+						return stmt;
+					},
+					all: async () => {
+						if (sql.includes("FROM settings")) {
+							const keys = stmt.boundArgs as string[];
+							return {
+								results: keys
+									.map((key) => rows.find((r) => r.key === key))
+									.filter((row): row is SettingRow => Boolean(row))
+									.map((row) => ({ key: row.key, value: row.value })),
+							};
+						}
+						return { results: [] };
+					},
+					first: async () => {
+						if (sql.includes("FROM settings")) {
+							const key = stmt.boundArgs[0];
+							const row = rows.find((r) => r.key === key);
+							return row ? { value: row.value } : null;
+						}
+						return null;
+					},
+					run: async () => {
+						if (sql.includes("INSERT INTO settings")) {
+							const [key, value] = stmt.boundArgs as [string, string];
+							const existing = rows.find((r) => r.key === key);
+							if (existing) {
+								existing.value = value;
+							} else {
+								rows.push({ key, value });
+							}
+						}
+						return {};
+					},
+				};
+				return stmt;
+			},
+		};
+		return db as unknown as D1Database;
+	}
+
 	it("GET returns the key (default false)", async () => {
 		const { env } = makeRouteEnv();
 		const res = await settingsApp.request("/", { method: "GET" }, env);
@@ -315,6 +466,41 @@ describe("settings route — debug_request_body_log CRUD", () => {
 		const res = await settingsApp.request("/", { method: "GET" }, env);
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.debug_request_body_log).toBe(true);
+	});
+
+	it("GET reads uncached (admin form truth): PUT then same-binding GET sees the new value immediately", async () => {
+		// 回归（F2）：GET 旧走 30s TTL 缓存的 loadDebugLogFlag，PUT 后同
+		// isolate 立即 GET 会看到陈旧 false。先用缓存路径预热同一 db 绑定的
+		// 缓存条目（false 快照），若 GET 仍走缓存必拿陈旧值
+		const rows: SettingRow[] = [];
+		const db = makeMutableSettingsDb(rows);
+		const env = { DB: db } as unknown as RequestEnv;
+
+		await loadDebugLogFlag(db); // 预热缓存：raw = {} → false
+
+		const before = await settingsApp.request("/", { method: "GET" }, env);
+		expect(
+			((await before.json()) as Record<string, unknown>)
+				.debug_request_body_log,
+		).toBe(false);
+
+		const put = await settingsApp.request(
+			"/",
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ debug_request_body_log: true }),
+			},
+			env,
+		);
+		expect(put.status).toBe(200);
+
+		const after = await settingsApp.request("/", { method: "GET" }, env);
+		expect(after.status).toBe(200);
+		expect(
+			((await after.json()) as Record<string, unknown>)
+				.debug_request_body_log,
+		).toBe(true);
 	});
 
 	it("PUT accepts strict booleans and stores the normalized string", async () => {

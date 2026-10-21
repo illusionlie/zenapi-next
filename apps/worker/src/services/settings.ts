@@ -726,6 +726,21 @@ export async function loadDebugLogFlag(
 }
 
 /**
+ * Uncached read for the admin settings form — the "admin form truth" posture
+ * (same contract as loadProxyRetryConfig): a PUT followed by a GET on the same
+ * isolate must observe the new value immediately, so this variant bypasses the
+ * debugLogFlagCaches TTL memoization that serves the /v1 hot-path middleware.
+ * Fallback-chain semantics are identical to loadDebugLogFlag.
+ */
+export async function loadDebugLogFlagDirect(
+	db: D1Database,
+	envFallback?: DebugLogEnvFallback,
+): Promise<boolean> {
+	const raw = await readSettingsRawMap(db, [DEBUG_REQUEST_BODY_LOG_KEY]);
+	return resolveDebugLogFlag(raw, envFallback);
+}
+
+/**
  * Updates the debug request body log flag (stored strictly as "true"/"false").
  */
 export async function setDebugRequestBodyLog(

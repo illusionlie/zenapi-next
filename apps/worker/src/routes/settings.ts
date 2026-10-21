@@ -18,7 +18,7 @@ import {
 	getSessionTtlHours,
 	getTurnstileConfig,
 	isAdminPasswordSet,
-	loadDebugLogFlag,
+	loadDebugLogFlagDirect,
 	loadProxyRetryConfig,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
@@ -76,9 +76,11 @@ settings.get("/", async (c) => {
 	const modelTestPrompt = await getModelTestPrompt(c.env.DB);
 	const proxyRetryConfig = await loadProxyRetryConfig(c.env.DB);
 	const turnstileConfig = await getTurnstileConfig(c.env.DB);
-	// 不带 env 回退（与 loadProxyRetryConfig(db) 同一 GET 契约）：表单即真相，
-	// 不透显 env 值，避免保存时把 env 值意外固化进 settings
-	const debugRequestBodyLog = await loadDebugLogFlag(c.env.DB);
+	// 不带 env 回退、绕过 30s TTL 缓存（与 loadProxyRetryConfig(db) 同一
+	// "admin form truth" GET 契约）：PUT 后同 isolate 的 GET 必须立即看到新值
+	// （loadDebugLogFlagDirect），/v1 热路径中间件仍走缓存的 loadDebugLogFlag；
+	// 也不透显 env 值，避免保存时把 env 值意外固化进 settings
+	const debugRequestBodyLog = await loadDebugLogFlagDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
