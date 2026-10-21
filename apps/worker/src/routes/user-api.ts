@@ -124,7 +124,8 @@ userApi.get("/monitoring", async (c) => {
 	const now = new Date();
 	const since = new Date(now.getTime() - config.ms).toISOString().slice(0, 19);
 	// Two-segment assembly (platform-wide, same as admin monitoring): complete
-	// past days from usage_stats_daily, today's rows from usage_logs. Trend
+	// past days from usage_stats_daily, today's rows from usage_logs; sub-day
+	// ranges go raw-only with exact bounds (same splitWindow rule). Trend
 	// slots use the rollup only when the slot size is a full day.
 	const split = splitWindow(since, null, now);
 

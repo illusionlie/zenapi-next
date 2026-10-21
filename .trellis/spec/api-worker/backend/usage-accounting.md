@@ -86,7 +86,7 @@ mergeRawUsage(acc, extractRawUsage(parsed)); // 非 null 覆盖
 // normalizeUsage 内按 §3.2 条件折算 prompt，cache_read/creation 落库为独立列
 ```
 
-## 8. 计费原子化契约（2026-10-19 P0 增补）
+## 8. 计费原子化契约（2026-10-19 P0 增补；2026-10-21 评审修复：单次重试 + 可对账日志）
 
 ### 8.1 Scope / Trigger
 
@@ -110,7 +110,8 @@ type UsageInput = {
 - **batch = 单事务**（D1 batch 语义）：三写同生共死，不存在「记了日志没扣费」中间态。
 - 余额 SQL 固定为 `UPDATE users SET balance = MAX(0, balance - ?), updated_at = ? WHERE id = ?`：**钳制不为负**（2026-10-19 用户决策）；`usage_logs.cost` 记真实成本，差额 = cost − Δbalance 仅发生在余额不足边缘场景，可对账审计；正常路径最终态与旧三写形态完全一致。
 - quota 条件照旧（`tokenId && totalTokens`，无条件累加）；并发上浮有界 = 在途数 × 单次增量，AGENTS §8 文档化，不做条件更新。
-- 失败：`console.error("[usage] billing batch failed", { tokenId, userId, cost, error })`，**不 rethrow**——计费收尾失败不影响已成功的上游响应（logging-guidelines 已批准例外）。
+- 失败：**先 250ms 单次重试**（`opts.retryDelayMs` 可注入、测试传 0）——重放同一 statements 数组（引用复用，不重建），batch 失败已整体回滚故无半态风险；两次都败才 `console.error`，**不 rethrow**——计费收尾失败不影响已成功的上游响应（logging-guidelines 已批准例外）。
+- 失败日志载荷（可对账）：`{ tokenId, userId, cost, model, channelId, requestPath, promptTokens, completionTokens, totalTokens, status, attempts: 2, error }`——Logpush 侧按 `payload.status ?? "ok"`、tokens `?? 0` 三态还原 INSERT 行为；tag 字面 `[usage] billing batch failed` 是告警签名锚点，不得改动。
 - 调用方（`routes/proxy.ts` / `routes/anthropic-proxy.ts`）只算 cost 并传 `userId`，**禁止**在路由层自行扣余额；错误路径零值 INSERT 不带 userId/cost（即单语句 batch 形态）。
 
 ### 8.4 Validation & Error Matrix
@@ -119,7 +120,7 @@ type UsageInput = {
 |------|------|
 | 无 tokenId / totalTokens = 0 | 无 quota 语句，其余照常 |
 | cost = 0 或无 userId | 无 balance 语句 |
-| batch 任一语句失败 | 整批回滚 + `[usage]` console.error，调用方 promise 正常 resolve |
+| batch 任一语句失败 | 首败 250ms 后重放一次；再败 → 整批回滚 + `[usage]` console.error（全字段载荷 + attempts:2），调用方 promise 正常 resolve |
 | balance < cost | 扣至 0，`usage_logs.cost` 记真实值 |
 
 ### 8.5 Good/Base/Bad Cases
@@ -130,7 +131,7 @@ type UsageInput = {
 
 ### 8.6 Tests Required
 
-`tests/usage-billing.test.ts`：三语句形态与逐位绑定（含 `MAX(0, balance - ?)` SQL 文本 toBe 断言）、条件省略三分支、batch reject → console.error 载荷断言 + `resolves.toBeUndefined()` + 成功路径静默。锚点：cost=0.5 且余额不足时 balance 绑定 `[0]`。
+`tests/usage-billing.test.ts`：三语句形态与逐位绑定（含 `MAX(0, balance - ?)` SQL 文本 toBe 断言）、条件省略三分支、batch reject → console.error 载荷断言 + `resolves.toBeUndefined()` + 成功路径静默。锚点：cost=0.5 且余额不足时 balance 绑定 `[0]`。2026-10-21 增：拒一次被吸收（batch 共 2 次、无失败日志、重放含完整三写）、拒两次载荷含 model/channel/tokens/status/attempts、成功路径恰一次 batch。
 
 ### 8.7 Wrong vs Correct
 
@@ -149,7 +150,7 @@ await env.DB.batch([insertUsage, quotaStmt, balanceStmt]); // 单事务；balanc
 // 失败：console.error("[usage] billing batch failed", ...) 不 rethrow
 ```
 
-## 9. 预聚合与维护契约（2026-10-19 P2 增补）
+## 9. 预聚合与维护契约（2026-10-19 P2 增补；2026-10-21 评审修复：短窗口 raw-only / 配额保险丝 / 自愈补漏）
 
 ### 9.1 Scope / Trigger
 
@@ -159,21 +160,30 @@ await env.DB.batch([insertUsage, quotaStmt, balanceStmt]); // 单事务；balanc
 
 ```ts
 // services/usage-stats.ts
-splitWindow(fromIso: string, toIso: string): { rollupFrom: string; rollupTo: string; rawFrom: string; rawTo: string };
-// 两段严格不相交：rollup 段 stat_date ≤ 昨日（UTC），raw 段 created_at ≥ 今日零点；to 落在往日按整天近似计入
-rollupDate(db, date: string): Promise<void>;   // 同日先 DELETE 再 INSERT SELECT，幂等；防丢守卫见 9.3
-pruneUsageLogsBatched(db, beforeIso: string, chunk = 500): Promise<number>; // rowid IN + LIMIT 循环，可重入
-runDailyMaintenance(env): Promise<void>;       // cron 四步：rollup 昨日 → 原始日志 retention → sessions → rollup 180d
+splitWindow(fromIso, toIso, now?): { rollupFrom: UtcDate | null; rollupTo: UtcDate; rawFrom: string | null; rawTo: string | null };
+// 两段严格不相交：rollup 段 stat_date ≤ 昨日（UTC），raw 段 created_at ≥ 今日零点。
+// span ≤ 1 天（秒粒度 floor 判定）→ raw-only 精确边界，不吃日粒度近似；
+// 时间戳解析统一 parseUtcIsoMs：19 字符截断形态补 Z，禁止裸 Date.parse（无 Z 按本地时区）
+rollupDate(db, date): Promise<void>;   // 同日先 DELETE 再 INSERT SELECT，幂等；防丢守卫见 9.3
+rollupRecentMissing(db, now, lookbackDays = 7): Promise<UtcDate[]>;  // 自愈扫窗：逐日 SELECT 1 索引探测，缺才 rollupDate；单日写失败按日容错，probe 读失败冒泡
+pruneUsageLogsBatched(db, beforeIso, opts?: { chunkSize?; maxRounds? }): Promise<{ deleted: number; complete: boolean }>;
+// 默认 RETENTION_CHUNK_ROWS=5000 × RETENTION_MAX_ROUNDS=180；轮数到顶 complete=false（可重入续删）
+retentionCutoffIso(now, retentionDays): string;  // UTC 毫秒统一 cutoff（cron 与手动端点共用，禁本地时区日历运算）
+rollupMissingDates(db, now?): Promise<UtcDate[]>;  // MIN(created_at) 探底 + JS 枚举日期 + DISTINCT stat_date 差集；禁 substr(created_at) 全表扫
+runDailyMaintenance(env): Promise<void>;  // cron 四步：自愈扫窗（含昨日，排除今日）→ retention（complete=false 时 console.warn）→ sessions → rollup 180d
 ```
 
 ### 9.3 Contracts
 
 - **聚合口径承继**：rollup 表含 `cache_prompt_base` 列（§3.4 的 `SUM(CASE WHEN cached IS NOT NULL THEN prompt ELSE 0)` 逐日预算），两段合并后 `computeCacheRate` 口径与 raw 直查严格一致（NULL ≠ 0 不变）。
 - **两段不相交**：读取端永远钳制 rollup 段 ≤ 昨日、raw 段 ≥ 今日零点——管理员手动 rollup 今日也不会导致重复计数。
-- **`to` 边界整天近似**：`to` 落在往日时该日整天从 rollup 计入（旧 raw 直查是精确时间戳截断；date-only `to` 甚至语义相反）。shipped UI 从不传 `to`，仅影响外部 API 客户端，AGENTS §8 已注记。
+- **短窗口 raw-only（2026-10-21）**：span ≤ 1 天（`to` 缺省时以 now 为终点，秒粒度 floor——`slice(0,19)` 截断 + now 带毫秒，毫秒直比漏判 1d 档）完全绕开 rollup 段，rawFrom/rawTo 用精确边界。防的缺陷：1d 档恒吃昨天整天（~2x 虚高）、15m/1h 档跨 UTC 午夜 24x–96x 放大、同响应 summary（split）与小时趋势（raw-only）自相矛盾。
+- **`to` 边界整天近似（仅 >1 天窗口）**：`to` 落在往日时该日整天从 rollup 计入（误差 ≤ 1/窗口天数）。shipped UI 从不传 `to`，仅影响外部 API 客户端，AGENTS §8 已注记。
 - **防丢守卫**：`rollupDate` 对「该日原始行已清且 rollup 行存在」直接 no-op——retention 清掉原始日志后，cron 重跑 / 显式单日回填都不得把幸存统计删空。
-- **cron 单步容错**：四步各自 try/catch `[rollup]`/`[retention]` console.error 继续；retention 读取走 `getRetentionDays` 三级回退（脏值回落默认 30，不会误清全表）。
+- **配额预算（2026-10-21）**：D1 每次调用 1000 条查询（Paid）/ 50（Free）上限覆盖 cron 整条链；最坏全链 ≈ 219 条（探测 7 + rollupDate 4×7 + settings 1 + DELETE ≤180 + sessions 2 + rollup 1）。改 chunk/轮数/扫窗天数前必须重算预算表。
+- **cron 单步容错**：四步各自 try/catch `[rollup]`/`[retention]` console.error 继续；retention 读取走 `getRetentionDays` 三级回退（脏值回落默认 30，不会误清全表）；自愈扫窗内单日**写**失败按日容错、**probe 读**失败冒泡到步骤级（读故障继续扫只会烧查询）。
+- **手动端点**：`POST /api/usage/prune` 响应 `{ deleted, complete }`，complete=false 表示保险丝到顶、重跑续删；`GET /api/usage` 内联 prune 与 cron 同一有界实现（Free 计划 50 条上限下仍可能超限，属文档化接受）。
 
 ### 9.4 Tests Required
 
-`tests/usage-stats.test.ts`（node:sqlite 适配器）：rollup 幂等与防丢守卫（无原始行 + 有 rollup 行 → 重跑行存值不变；空集照常写）、日切边界、`rawSummaryTotals` legacy SQL 与两段并集逐项相等（80/110 cache 分母锚点）、prune 循环终止/可重入、runDailyMaintenance 单步失败不阻断。部署后人工步骤：`POST /api/dashboard/rollup` 空体全量回填 → cron 接管；`wrangler dev --test-scheduled` 观察四步日志。
+`tests/usage-stats.test.ts`（node:sqlite 适配器）：rollup 幂等与防丢守卫（无原始行 + 有 rollup 行 → 重跑行存值不变；空集照常写）、日切边界、`rawSummaryTotals` legacy SQL 与两段并集逐项相等（80/110 cache 分母锚点）、prune 循环终止/可重入、runDailyMaintenance 单步失败不阻断。2026-10-21 增：短窗口 raw-only 单测族（1d/15m 跨午夜/历史子日/7d 回归/east+west 时区探针）与 split==raw-only 逐字段等价、保险丝（chunk=10/maxRounds=2/35 行 → {deleted:20, complete:false}）、自愈扫窗（缺 2 天恰补 2 天、在场日零写 marker 断言、单日失败容错）、retentionCutoffIso 固定字符串断言、rollupMissingDates 差集。部署后人工步骤：`POST /api/dashboard/rollup` 空体全量回填 → cron 接管；`wrangler dev --test-scheduled` 观察四步日志。

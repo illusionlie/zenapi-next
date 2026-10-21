@@ -16,9 +16,11 @@ monitoring.get("/", async (c) => {
 	const now = new Date();
 	const since = new Date(now.getTime() - config.ms).toISOString().slice(0, 19);
 	// Two-segment assembly: complete past days come from usage_stats_daily
-	// (day-granularity rollup), today's rows come from usage_logs. Hourly /
-	// minute trend slots cannot be served from a day-granularity rollup, so
-	// those queries only touch the rollup when the slot size is a full day.
+	// (day-granularity rollup), today's rows come from usage_logs. Sub-day
+	// ranges (15m/1h/1d) are span<=1d windows — splitWindow serves them
+	// raw-only with exact bounds, never the day-granularity approximation.
+	// Hourly / minute trend slots cannot be served from a day-granularity
+	// rollup, so those queries only touch it when the slot size is a full day.
 	const split = splitWindow(since, null, now);
 
 	const channelRows = await loadChannelHealthRows(c.env.DB, split);
