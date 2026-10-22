@@ -654,3 +654,28 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: OpenCode Zen 免费额度真身伪装：服务端预设引擎落地并实测通过
+
+**Date**: 2026-10-22
+**Task**: OpenCode Zen 免费额度真身伪装：服务端预设引擎落地并实测通过
+**Branch**: `main`
+
+### Summary
+
+渠道级服务端客户端预设引擎（disguise_preset 列 + opencode_zen_v1 指纹）：确定性降序 ses_ 会话 ID（同对话跨请求稳定）、按协议分段 UA、五层头应用顺序、body 合规（bash 工具注入 + 非流强制上游流式）、stream-aggregate 三协议 SSE 聚合还原非流 JSON；接线覆盖主代理/anthropic-proxy/Playground/test-model。Gate C 抓到并修复计费级 P0（转换分支强制流式缺 include_usage 注入致聚合产物无 usage）。测试 727 绿（新增 78）；AGENTS.md §8 与 proxy-headers/client-presets spec 同步沉淀。2026-10-22 用户渠道实测：zen key 免费模型 /test-model 返回 200，AC13 收口。范围外挂账：v2 通道（/inference、/zen/go）指纹、匿名 public 凭证、其余预设服务端化。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6b89caa` | (see git log) |
+| `227e5e6` | (see git log) |
+| `cbf0c9a` | (see git log) |
+| `57411ab` | (see git log) |
+| `91b8aac` | (see git log) |
+
+### Status
+
+[OK] **Completed**
