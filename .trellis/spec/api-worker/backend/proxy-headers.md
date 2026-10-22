@@ -30,6 +30,7 @@ export function applyHeaderPolicy(
 	policy: ProxyHeaderPolicy | null,
 	channelCustomJson: string | null | undefined,
 	disguiseJson?: string | null, // 渠道伪装头（09-17-channel-client-disguise），非法 JSON 按空配置
+	presetHeaders?: Record<string, string> | null, // 服务端客户端预设头（10-21-opencode-zen-disguise），已求值字面值，见 client-presets.md
 ): void;
 
 // 系统提示词注入（同一任务的姊妹契约）：utils/client-disguise.ts
@@ -62,10 +63,18 @@ buildChannelRequest(channel, targetPath, querySuffix, incomingHeaders,
   `AdminApp.tsx (loadSettings ?? "" 映射 + handleSettingsSubmit)` → `SettingsView.tsx` 表单。
 - KV 键常量单点定义于 `utils/proxy-headers.ts`，service/route 引用常量，不要散落字符串字面量。
 - 渠道伪装头（`channels.disguise_headers_json`，09-17 任务）：由 `applyHeaderPolicy` 第 4 参
-  统一注入，应用顺序固定为 **剔除 → 全局注入 → 伪装头 → 渠道级 custom_headers**（后应用者赢，
-  伪装可覆盖全局与内置头、可被渠道级覆盖）。非法 JSON 按空配置（fail-open），绝不阻断代理请求。
-  `policy === null`（Playground / test-model 豁免）时**伪装头与渠道级仍生效**，仅跳过全局两步。
-  **动态模板（09-19）**：伪装头的**值**在应用时刻经 `resolveDisguiseTemplate` 解析——每次调用
+  统一注入，应用顺序固定为 **剔除 → 全局注入 → 预设头 → 伪装头 → 渠道级 custom_headers**
+  （后应用者赢，伪装可覆盖预设、全局与内置头、可被渠道级覆盖）。非法 JSON 按空配置（fail-open），
+  绝不阻断代理请求。`policy === null`（Playground / test-model 豁免）时**预设 / 伪装 / 渠道级
+  仍生效**，仅跳过全局两步。
+- 服务端客户端预设头（`channels.disguise_preset`，10-21-opencode-zen-disguise 任务；引擎契约见
+  [client-presets.md](./client-presets.md)）：由 `applyHeaderPolicy` 第 5 参（末位可选）注入，
+  调用方先经 `applyClientPreset` 每请求求值一次（headers 内含当次派生的会话/消息 ID）。预设层
+  两条专属规则：① 预设值是**已求值字面值**，**不**解释 `{{...}}` 模板——模板解析仍是伪装头
+  独占域；② **全局剔除对预设头保持裁决权**——进入 `removeHeaders` 清单的头名（大小写不敏感，
+  同 `headers.delete` 语义）预设层跳过注入，否则先行的剔除会被预设层的 set 静默回填，覆盖链
+  退化为「预设恒赢」；全局注入因先行应用**不能**覆盖预设头。
+- 伪装头动态模板（09-19）：伪装头的**值**在应用时刻经 `resolveDisguiseTemplate` 解析——每次调用
   `applyHeaderPolicy`（即每请求 / 每 attempt / 每探针）独立求值，重试 / 换渠道 / 换 Key 天然新鲜；
   这是特性不是浪费，**不要**把解析上移到策略/配置加载时（会把动态值冻结成静态值）。
 - 伪装提示词（`channels.disguise_system_prompt`）不在本契约内：经 `utils/client-disguise.ts`
@@ -123,7 +132,7 @@ applyHeaderPolicy(headers, policy, channel.custom_headers_json);
 ## Gotchas（踩过的坑）
 
 > **Warning：「后应用者赢」贯穿始终。**
-> 应用顺序固定为 剔除 → 全局注入 → 渠道级，后写者可覆盖内置鉴权头
+> 应用顺序固定为 剔除 → 全局注入 → 预设头 → 伪装头 → 渠道级，后写者可覆盖内置鉴权头
 > （`Authorization` / `x-api-key`）。这是刻意保留的能力（历史 custom 分支即如此），
 > 不要加"保护名单"回退它；风险由 UI 警示文案兜底。
 
@@ -151,6 +160,14 @@ applyHeaderPolicy(headers, policy, channel.custom_headers_json);
 > 测试有域界定对照用例）。未知占位符原样发送、不报错。由此 `proxy-headers ↔ client-disguise`
 > 存在**刻意的双向 call-time 引用**（双向均为函数体内引用、无顶层求值），勿把任一侧改为
 > 顶层初始化，也不要为"消除环"把函数挪进循环依赖更深的文件。
+
+> **Warning：预设头层（第 5 参 `presetHeaders`）是字面值域，唯一来源是预设引擎。**
+> 头值由 `services/client-presets.ts` 的 `applyClientPreset` 每请求求值（内含确定性派生的
+> 会话/消息 ID）；引擎对 NULL / 未知 ID fail-open 返回 null（零回归），不在 `applyHeaderPolicy`
+> 内部兜底。**绝不**在预设层调 `resolveDisguiseTemplate`——模板解析是伪装独占域（域界定有
+> 测试锚定，五层顺序用例见 `tests/client-preset-headers.test.ts`）。全局 remove 清单对预设头
+> 保持裁决权（清单内头名预设层跳过注入，大小写不敏感）；全局 inject 因先行不能覆盖预设头；
+> `policy === null` 豁免只跳全局两步，预设/伪装/custom 照常生效。
 
 > **Warning：伪装提示词注入不得原地修改共享 parsedBody。**
 > 同一 parsedBody 跨重试轮 / 跨渠道复用；openai 透传与 anthropic-proxy 各分支注入时

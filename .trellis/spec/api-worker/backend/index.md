@@ -14,6 +14,7 @@
 | [Quality Guidelines](./quality-guidelines.md) | 提交门禁（check/typecheck/test）、Biome 规则、命名、禁则 | ✅ Filled |
 | [Logging Guidelines](./logging-guidelines.md) | console.* 前缀标签惯例、错误靠 jsonError/落库不打日志 | ✅ Filled |
 | [Proxy Headers](./proxy-headers.md) | 上游请求头策略契约（全局注入/剔除/渠道级）、settings 新增配置项标准链路 | ✅ Filled |
+| [Client Presets](./client-presets.md) | 服务端客户端预设引擎（代码常量指纹与版本刷新责任、确定性 ID 派生、工具合规与形状守卫、强制流式 SSE 聚合契约） | ✅ Filled |
 | [Settings Config](./settings-config.md) | 数值型 settings 契约与 env→settings 迁移模式（三级回退链、读宽写严、clamp 三层一致） | ✅ Filled |
 | [Format Conversion](./format-conversion.md) | 协议转换器契约（chat↔anthropic、chat↔responses 双向）：usage 末 chunk 惯例与口径换算、thinking 映射、fail-open 部件丢弃、流式不变量 | ✅ Filled |
 | [Channel Routing](./channel-routing.md) | 渠道多格式能力声明与统一路由矩阵（api_formats 双写、偏好序 selectTargetFormat、base_url 规范化、探测并集契约） | ✅ Filled |
