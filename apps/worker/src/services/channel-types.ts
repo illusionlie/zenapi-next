@@ -26,6 +26,9 @@ export type ChannelRow = {
 	custom_headers_json?: string | null;
 	disguise_headers_json?: string | null;
 	disguise_system_prompt?: string | null;
+	// 服务端客户端预设 ID（白名单 CLIENT_PRESET_IDS，services/client-presets.ts）；
+	// NULL/空 = 不启用（fail-open 关闭）
+	disguise_preset?: string | null;
 	stream_only?: number | null;
 	created_at?: string | null;
 	updated_at?: string | null;

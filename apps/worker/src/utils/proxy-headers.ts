@@ -111,28 +111,51 @@ export async function loadProxyHeaderPolicy(
 
 /**
  * Applies the header policy to an upstream request Headers object in a
- * fixed order: remove (client pass-through) → global inject → channel
- * disguise headers → channel-level custom headers. Later appliers win, so
- * channel-level overrides disguise, disguise overrides global, and global
- * overrides built-in headers (Authorization / x-api-key / ...).
+ * fixed five-layer order: remove (client pass-through) → global inject →
+ * preset headers (client-presets.ts, literal) → channel disguise headers →
+ * channel-level custom headers. Later appliers win, so channel-level
+ * overrides disguise, disguise overrides preset and global, global inject
+ * never clobbers preset headers (it applies first), and global remove
+ * strips preset headers too (the preset layer skips names present in the
+ * remove list, so the removal decision is not silently re-added);
+ * global overrides built-in headers (Authorization / x-api-key / ...).
  * With policy === null both global steps are skipped (Playground exemption)
- * while disguise and channel-level headers still apply.
- * Disguise header values support `{{...}}` dynamic templates resolved at
- * call time (per upstream request / attempt); channel-level custom and
- * global extra/remove headers stay literal. Malformed disguise JSON is
- * treated as an empty config (fail-open, PRD AC7).
+ * while preset, disguise and channel-level headers still apply.
+ * Preset header values are already evaluated by the preset engine
+ * (session/message IDs) and stay literal — template resolution remains a
+ * disguise-only domain. Disguise header values support `{{...}}` dynamic
+ * templates resolved at call time (per upstream request / attempt);
+ * channel-level custom and global extra/remove headers stay literal.
+ * Malformed disguise JSON is treated as an empty config (fail-open, PRD AC7).
  */
 export function applyHeaderPolicy(
 	headers: Headers,
 	policy: ProxyHeaderPolicy | null,
 	channelCustomJson: string | null | undefined,
 	disguiseJson?: string | null,
+	presetHeaders?: Record<string, string> | null,
 ): void {
 	if (policy) {
 		for (const name of policy.removeHeaders) {
 			headers.delete(name);
 		}
 		for (const [key, value] of Object.entries(policy.extraHeaders)) {
+			headers.set(key, value);
+		}
+	}
+	if (presetHeaders) {
+		// 预设层已求值（会话/消息 ID 已生成），字面注入、不解释模板——
+		// 模板解析仍是伪装头独占域（域界定有测试锚定）。
+		// 全局剔除对预设头保持裁决权（PRD AC5）：进入剔除清单的头名预设不再
+		// 注入（大小写不敏感，与 headers.delete 同语义）——否则先行的剔除会被
+		// 预设层的 set 静默回填，覆盖链退化为「预设恒赢」。
+		const removed = policy
+			? new Set(policy.removeHeaders.map((name) => name.toLowerCase()))
+			: new Set<string>();
+		for (const [key, value] of Object.entries(presetHeaders)) {
+			if (removed.has(key.toLowerCase())) {
+				continue;
+			}
 			headers.set(key, value);
 		}
 	}

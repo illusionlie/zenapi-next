@@ -21,6 +21,10 @@ import {
 	getActiveChannelsCached,
 } from "../services/channels";
 import {
+	applyClientPreset,
+	isStreamForcingPreset,
+} from "../services/client-presets";
+import {
 	anthropicToOpenaiResponse,
 	createAnthropicToOpenaiStreamTransform,
 	createOpenaiToResponsesStreamTransform,
@@ -44,6 +48,10 @@ import {
 	resolveDeveloperNormalizeFlag,
 	resolveProxyRetryConfig,
 } from "../services/settings";
+import {
+	aggregateUpstreamStream,
+	protocolForTargetFormat,
+} from "../services/stream-aggregate";
 import { recordUsage } from "../services/usage";
 import {
 	injectSystemPromptAnthropic,
@@ -145,7 +153,7 @@ function isConvertedChatPath(path: string): boolean {
  * every branch here (URL rules, headers, disguise) acts on the target.
  * policy 为 null 时跳过全局注入/剔除（Playground 豁免），渠道级 custom_headers
  * 与伪装头经 applyHeaderPolicy 统一在各格式分支生效（剔除 → 全局注入 →
- * 伪装头 → 渠道级）。disguisePrompt 为渠道伪装系统提示词（design §3.1 矩阵）：
+ * 预设头 → 伪装头 → 渠道级）。disguisePrompt 为渠道伪装系统提示词（design §3.1 矩阵）：
  * openai 透传仅 chat 入站注入（messages 为数组时，mutate 后重新 stringify）；
  * openai 目标 + /v1/responses 入站在转换后的 chat 体 messages 注入；
  * anthropic / responses 分支转换完成后注入；/v1/responses 透传注入
@@ -156,6 +164,15 @@ function isConvertedChatPath(path: string): boolean {
  * 与 disguisePrompt 共享同一次 bodyCopy 拷贝与 stringify（先归一化后注入），
  * 无 developer 且无伪装时回退字节级 requestText（不重序列化）。anthropic /
  * responses 转换分支（已 hoist）与 custom 分支不受影响。
+ * disguise_preset 为渠道服务端客户端预设（services/client-presets.ts）：函数
+ * 开头按（渠道行预设 ID, 目标格式, parsedBody, isStream）求值一次，NULL /
+ * 未知 ID → null（fail-open），全部分支保持无预设的既有结构与字节输出。headers
+ * 经 applyHeaderPolicy 第 5 参注入（预设层已求值、字面值不解释模板；顺序保证
+ * 全局剔除可删预设头、全局注入不覆盖预设头、伪装 / custom 可覆盖预设）；body
+ * 合规（工具注入 + 非流客户端强制上游流式）按 design D5 接线表在副本 / 转换
+ * 产物上 transform——custom 目标仅头生效不解释 body，裸透传 gate 并入预设且
+ * transform 无修改、无其他动作时回退 requestText（零重序列化，不重序列化即
+ * 不落任何副本）。
  */
 export function buildChannelRequest(
 	channel: ChannelRecord,
@@ -176,6 +193,13 @@ export function buildChannelRequest(
 	const headers = new Headers(incomingHeaders);
 	headers.delete("host");
 	headers.delete("content-length");
+	// 服务端客户端预设：每请求求值一次（headers 内含当次派生的会话/消息 ID）。
+	// NULL/未知 ID 在引擎内首行短路返回 null——无预设路径不做任何额外工作。
+	const preset = applyClientPreset(channel.disguise_preset ?? null, {
+		targetFormat: apiFormat,
+		parsedBody,
+		isStream,
+	});
 
 	if (apiFormat === "anthropic") {
 		// 每格式端点覆盖（design.md §1）：无覆盖 = normalizeBaseUrl(base_url)，
@@ -191,6 +215,7 @@ export function buildChannelRequest(
 			headerPolicy,
 			channel.custom_headers_json,
 			channel.disguise_headers_json,
+			preset?.headers,
 		);
 
 		const anthropicBody = parsedBody
@@ -198,6 +223,12 @@ export function buildChannelRequest(
 			: {};
 		if (isStream) {
 			(anthropicBody as Record<string, unknown>).stream = true;
+		}
+		// 预设 body 合规（工具注入 + 非流强制流式）：转换产物是每次新建的
+		// fresh body，mutate 不会泄漏跨重试轮；该分支本就重序列化。先 transform
+		// 后注入伪装（两者互不触碰对方字段，顺序仅约定）。
+		if (preset && parsedBody !== null) {
+			preset.transformBody(anthropicBody as Record<string, unknown>);
 		}
 		// Disguise prompt (#2, design §3.1): inject after conversion — the
 		// converted body is fresh per call, so mutating it cannot leak across
@@ -233,7 +264,14 @@ export function buildChannelRequest(
 			target = cfSafeUrl(`${baseUrl}/responses${querySuffix}`);
 			const shouldNormalizeInput =
 				normalizeDeveloperRole === true && parsedBody !== null;
-			if ((disguisePrompt && parsedBody) || shouldNormalizeInput) {
+			// 预设 body 合规并入同一 gate（design D5）：仅在确有入站 body 时
+			// 进入重写路径——无预设时该条件恒 false，gate 与既有结构逐字节一致。
+			const presetTouchesBody = preset !== null && parsedBody !== null;
+			if (
+				(disguisePrompt && parsedBody) ||
+				shouldNormalizeInput ||
+				presetTouchesBody
+			) {
 				const bodyCopy: Record<string, unknown> = { ...parsedBody };
 				if (shouldNormalizeInput && Array.isArray(bodyCopy.input)) {
 					// Per-item clone before the in-place rename: the caller's shared
@@ -247,8 +285,17 @@ export function buildChannelRequest(
 					);
 				}
 				let changed = false;
+				if (preset) {
+					// 先 transform（工具合规 + 非流强制流式）后注入伪装；transform
+					// 只写 bodyCopy 顶层字段（tools 数组引擎内先拷贝再追加），不改
+					// 共享 parsedBody。返回 false 且无其他动作 → 下方回退 requestText
+					// （零重序列化，字节级透传）。
+					if (preset.transformBody(bodyCopy)) {
+						changed = true;
+					}
+				}
 				if (shouldNormalizeInput) {
-					changed = normalizeResponsesDeveloperRole(bodyCopy);
+					changed = normalizeResponsesDeveloperRole(bodyCopy) || changed;
 				}
 				if (disguisePrompt && parsedBody) {
 					injectSystemPromptResponses(bodyCopy, disguisePrompt);
@@ -272,6 +319,11 @@ export function buildChannelRequest(
 			if (isStream) {
 				(responsesBody as Record<string, unknown>).stream = true;
 			}
+			// 预设 body 合规：转换产物 fresh，mutate 不泄漏；该分支本就重序列化
+			// （无零重序列化诉求）。
+			if (preset && parsedBody !== null) {
+				preset.transformBody(responsesBody as Record<string, unknown>);
+			}
 			// Disguise prompt (#3, design §3.1): converted body is fresh per
 			// call — inject instructions directly.
 			if (disguisePrompt && parsedBody) {
@@ -294,6 +346,7 @@ export function buildChannelRequest(
 			headerPolicy,
 			channel.custom_headers_json,
 			channel.disguise_headers_json,
+			preset?.headers,
 		);
 		return { target, headers, body };
 	}
@@ -305,11 +358,14 @@ export function buildChannelRequest(
 		headers.set("x-api-key", String(effectiveKey));
 		// Disguise prompt NOT injected (#5, design §3.1): body structure is
 		// unknown, blind edits could corrupt the request — headers only.
+		// 预设同理：仅头生效（预设引擎对 custom 目标的 transformBody 本就是
+		// no-op，此处亦不设调用点——协议未知不解释 body，design D5）。
 		applyHeaderPolicy(
 			headers,
 			headerPolicy,
 			channel.custom_headers_json,
 			channel.disguise_headers_json,
+			preset?.headers,
 		);
 		return { target, headers, body: requestText || undefined };
 	}
@@ -335,6 +391,18 @@ export function buildChannelRequest(
 			(chatBody as Record<string, unknown>).stream_options = {
 				include_usage: true,
 			};
+		} else if (preset?.forceUpstreamStream === true) {
+			// 预设强制上游流式（客户端非流）与 handler 层注入条件同源：上游真
+			// 流式才有 usage 尾 chunk 可解析。stream 字段由下方 transformBody
+			// 写入，此处只补 include_usage。
+			(chatBody as Record<string, unknown>).stream_options = {
+				include_usage: true,
+			};
+		}
+		// 预设 body 合规（工具注入 + 非流强制流式）：转换产物 fresh，mutate
+		// 不泄漏；该分支本就重序列化。先 transform 后注入伪装。
+		if (preset && parsedBody !== null) {
+			preset.transformBody(chatBody as Record<string, unknown>);
 		}
 		// Disguise prompt: the converted body is fresh per call — inject into
 		// messages directly (same post-conversion pattern as the anthropic and
@@ -356,6 +424,7 @@ export function buildChannelRequest(
 		headerPolicy,
 		channel.custom_headers_json,
 		channel.disguise_headers_json,
+		preset?.headers,
 	);
 	// Disguise prompt (#1, design §3.1): chat inbound only — inject into a
 	// per-call copy of the parsed body (messages array cloned) so the caller's
@@ -369,6 +438,10 @@ export function buildChannelRequest(
 	// no developer left and fall back to the un-normalized requestText. Flag
 	// on with no developer message and no disguise → body stays byte-identical
 	// requestText (no re-serialization, AC1/AC2).
+	// 预设 body 合规并入同一 gate（design D5）：仅在确有入站 body 时进入重写
+	// 路径——无预设时该条件恒 false，gate 与既有结构逐字节一致。gate 内先
+	// transform 后归一化/注入伪装；transform 返回 false 且无其他动作时
+	// changed 保持 false → 回退字节级 requestText（零重序列化）。
 	let body: string | undefined = requestText || undefined;
 	const shouldNormalizeDeveloper =
 		normalizeDeveloperRole === true &&
@@ -379,15 +452,16 @@ export function buildChannelRequest(
 		parsedBody !== null &&
 		isConvertedChatPath(targetPath) &&
 		Array.isArray(parsedBody.messages);
-	if (shouldNormalizeDeveloper || injectDisguisePrompt) {
+	const presetTouchesBody = preset !== null && parsedBody !== null;
+	if (shouldNormalizeDeveloper || injectDisguisePrompt || presetTouchesBody) {
 		const bodyCopy: Record<string, unknown> = { ...parsedBody };
 		if (Array.isArray(bodyCopy.messages)) {
 			const items = bodyCopy.messages as unknown[];
 			// Normalize path: per-item clone before the in-place rename — the
 			// caller's shared parsed body must stay pristine across retry rounds
 			// (a rename leaking into it would make a retry find no developer left
-			// and fall back to the un-normalized requestText). Disguise path:
-			// plain array clone, unchanged behavior.
+			// and fall back to the un-normalized requestText). Disguise /
+			// preset-only path: plain array clone, unchanged behavior.
 			bodyCopy.messages = shouldNormalizeDeveloper
 				? items.map((msg) =>
 						msg && typeof msg === "object"
@@ -397,8 +471,15 @@ export function buildChannelRequest(
 				: [...items];
 		}
 		let changed = false;
+		if (preset) {
+			// transformBody 只写 bodyCopy 顶层字段（tools 数组在引擎内先拷贝
+			// 再追加），绝不触碰共享 parsedBody——重试轮/换渠道不累积。
+			if (preset.transformBody(bodyCopy)) {
+				changed = true;
+			}
+		}
 		if (shouldNormalizeDeveloper) {
-			changed = normalizeChatDeveloperRole(bodyCopy);
+			changed = normalizeChatDeveloperRole(bodyCopy) || changed;
 		}
 		if (disguisePrompt && isConvertedChatPath(targetPath)) {
 			injectSystemPromptOpenAI(bodyCopy, disguisePrompt);
@@ -665,35 +746,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 	const normalizeDeveloperRole = resolveDeveloperNormalizeFlag(proxySettings);
 
 	const reasoningEffort = extractReasoningEffort(parsedBody);
-	// Chat-only stream_options usage injection happens here for chat-shaped
-	// inbound bodies (spec §3.1). /v1/responses inbound is exempt — that
-	// protocol has no stream_options parameter. For responses inbound bodies
-	// the equivalent injection happens post-conversion inside
-	// buildChannelRequest (openai target converts the body into a chat
-	// completions call and injects stream_options on the fresh converted
-	// body), so the final upstream body carries it exactly once.
-	const isResponsesInbound = c.req.path
-		.toLowerCase()
-		.startsWith("/v1/responses");
-	if (
-		isStream &&
-		parsedBody &&
-		typeof parsedBody === "object" &&
-		!isResponsesInbound
-	) {
-		const streamOptions = (parsedBody as Record<string, unknown>)
-			.stream_options;
-		if (!streamOptions || typeof streamOptions !== "object") {
-			(parsedBody as Record<string, unknown>).stream_options = {
-				include_usage: true,
-			};
-		} else if (
-			(streamOptions as Record<string, unknown>).include_usage !== true
-		) {
-			(streamOptions as Record<string, unknown>).include_usage = true;
-		}
-		requestText = JSON.stringify(parsedBody);
-	}
 
 	// Resolve channel/model routing syntax (uses original model name)
 	const { targetChannel, actualModel } = resolveChannelRoute(
@@ -792,6 +844,49 @@ proxy.all("/*", tokenAuth, async (c) => {
 		}
 	}
 
+	// Chat-only stream_options usage injection for chat-shaped inbound bodies
+	// (spec §3.1). /v1/responses inbound is exempt — that protocol has no
+	// stream_options parameter. For responses inbound bodies the equivalent
+	// injection happens post-conversion inside buildChannelRequest (openai
+	// target converts the body into a chat completions call and injects
+	// stream_options on the fresh converted body), so the final upstream body
+	// carries it exactly once.
+	// 位于路由矩阵 / stream_only 过滤之后：客户端非流式但渠道预设强制上游流式
+	// （forceUpstreamStream）时，上游真流式才有 usage 尾 chunk 可解析，注入
+	// 条件须看最终候选池是否含强制流式预设的渠道；custom 目标预设不解释
+	// body、不强制流式，予以排除。纯流式客户端路径与既有行为一致——候选池
+	// 判定仅在 !isStream 时求值；注入在 model 改写之后执行，此处 stringify
+	// 的 requestText 已含别名解析后的 model，后续逐渠道别名拷贝展开同一
+	// parsedBody 自然携带注入结果。
+	const isResponsesInbound = c.req.path
+		.toLowerCase()
+		.startsWith("/v1/responses");
+	const upstreamForcedStream =
+		!isStream &&
+		candidates.some(
+			(ch) =>
+				ch.api_format !== "custom" && isStreamForcingPreset(ch.disguise_preset),
+		);
+	if (
+		(isStream || upstreamForcedStream) &&
+		parsedBody &&
+		typeof parsedBody === "object" &&
+		!isResponsesInbound
+	) {
+		const streamOptions = (parsedBody as Record<string, unknown>)
+			.stream_options;
+		if (!streamOptions || typeof streamOptions !== "object") {
+			(parsedBody as Record<string, unknown>).stream_options = {
+				include_usage: true,
+			};
+		} else if (
+			(streamOptions as Record<string, unknown>).include_usage !== true
+		) {
+			(streamOptions as Record<string, unknown>).include_usage = true;
+		}
+		requestText = JSON.stringify(parsedBody);
+	}
+
 	// Channel cooldown (P2): drop cooling-down channels from the candidate
 	// pool before weighted ordering — same eligibility tier as the routing
 	// matrix above, createWeightedOrder stays a pure function. fail-open is
@@ -881,10 +976,30 @@ proxy.all("/*", tokenAuth, async (c) => {
 					channelLastResponse = response;
 					channelLastAttemptThrew = false;
 					if (response.ok) {
+						// 预设强制上游流式（客户端非流），仅对当前尝试渠道生效：
+						// 上游 SSE 在网关侧聚合为标准非流 JSON 再喂 convertResponse
+						// （其非流分支本就 await response.json()，本体零改动）。
+						// 聚合器入口 fail-open：非 SSE 响应原样返回——形状门禁未
+						// 命中（embeddings 等 body 未被改写、上游并未真流式）时零
+						// 行为变化。原 SSE body 由聚合器消费，聚合产物是新
+						// Response，后续 clone 的错误/usage 路径不受单次消费影响；
+						// 客户端流式请求不进此分支，流式路径结构不变。
+						let upstream = response;
+						if (
+							!isStream &&
+							response.body &&
+							channel.api_format !== "custom" &&
+							isStreamForcingPreset(channel.disguise_preset)
+						) {
+							upstream = await aggregateUpstreamStream(
+								protocolForTargetFormat(channel.api_format),
+								response,
+							);
+						}
 						// Convert response based on the channel's target format
 						lastResponse = await convertResponse(
 							channel,
-							response,
+							upstream,
 							isStream,
 							targetPath,
 						);

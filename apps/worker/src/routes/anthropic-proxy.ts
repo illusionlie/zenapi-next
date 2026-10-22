@@ -18,6 +18,10 @@ import {
 	getActiveChannelsCached,
 } from "../services/channels";
 import {
+	applyClientPreset,
+	isStreamForcingPreset,
+} from "../services/client-presets";
+import {
 	anthropicToOpenaiRequest,
 	createOpenaiToAnthropicStreamTransform,
 	openaiToAnthropicResponse,
@@ -31,6 +35,7 @@ import {
 	loadProxySettingsCached,
 	resolveProxyRetryConfig,
 } from "../services/settings";
+import { aggregateUpstreamStream } from "../services/stream-aggregate";
 import { recordUsage } from "../services/usage";
 import {
 	injectSystemPromptAnthropic,
@@ -278,27 +283,50 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 							headers.set("anthropic-beta", betaHeader);
 						}
 
+						// 服务端客户端预设：每尝试求值一次（headers 内含当次派生的
+						// 会话/消息 ID；NULL/未知 ID → null，fail-open 关闭）。
+						// parsedBody 传 anthropic 入站体——与透传 body 同源，形状
+						// 门禁与身份 ID 从同一对话信号派生。
+						const preset = applyClientPreset(channel.disguise_preset ?? null, {
+							targetFormat: "anthropic",
+							parsedBody,
+							isStream,
+						});
+
 						applyHeaderPolicy(
 							headers,
 							headerPolicy,
 							channel.custom_headers_json,
 							channel.disguise_headers_json,
+							preset?.headers,
 						);
 
-						// Disguise prompt (#6, design §3.1): inject into a per-attempt
-						// copy of the parsed Anthropic body via the same stringify chain
-						// as effectiveRequestText. Without a prompt the original text
-						// passes through byte-identical (zero regression).
+						// Disguise prompt (#6, design §3.1) 与预设 body 合规（D5）
+						// 共享同一重写 gate：无预设且无伪装时保持原文本字节级透传
+						// （零重序列化，零回归）。gate 内先 transform（工具合规 +
+						// 非流强制流式；形状门禁未命中返回 false）后注入伪装；
+						// transform 只写 bodyCopy 顶层字段（tools 数组引擎内先拷贝
+						// 再追加），不改共享 parsedBody。
 						let upstreamBody = channelRequestText;
-						if (disguisePrompt && parsedBody) {
+						const presetTouchesBody = preset !== null && parsedBody !== null;
+						if ((disguisePrompt && parsedBody) || presetTouchesBody) {
 							const bodyCopy: Record<string, unknown> = { ...parsedBody };
 							if (channelModelName !== effectiveModel) {
 								// Per-channel alias matched: carry the alias-resolved model
 								// like the channelRequestText stringify chain does.
 								bodyCopy.model = channelModelName;
 							}
-							injectSystemPromptAnthropic(bodyCopy, disguisePrompt);
-							upstreamBody = JSON.stringify(bodyCopy);
+							let changed = false;
+							if (preset) {
+								changed = preset.transformBody(bodyCopy) || changed;
+							}
+							if (disguisePrompt) {
+								injectSystemPromptAnthropic(bodyCopy, disguisePrompt);
+								changed = true;
+							}
+							if (changed) {
+								upstreamBody = JSON.stringify(bodyCopy);
+							}
 						}
 
 						response = await fetch(target, {
@@ -313,7 +341,17 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						if (response.ok) {
 							selectedChannel = channel;
 							selectedModelName = channelModelName;
-							lastResponse = response;
+							// 预设强制上游流式（客户端非流式入站）：上游 SSE 在网关
+							// 侧聚合为标准非流 Message JSON——客户端入站协议即
+							// anthropic，聚合产物即其非流形态，原样返回。聚合器入口
+							// fail-open：上游未真流式（形状门禁未命中、body 未改写）
+							// 时原样透传，零行为变化；客户端流式路径不进此分支。
+							lastResponse =
+								!isStream &&
+								response.body &&
+								isStreamForcingPreset(channel.disguise_preset)
+									? await aggregateUpstreamStream("anthropic", response)
+									: response;
 							break;
 						}
 					} else if (apiFormat === "openai") {
@@ -325,25 +363,54 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						const headers = new Headers();
 						headers.set("Authorization", `Bearer ${apiKey}`);
 						headers.set("content-type", "application/json");
+						// 服务端客户端预设：每尝试求值一次；parsedBody 传转换后的
+						// chat 体（实际上游 body）——形状门禁与工具检测都作用于它
+						const preset = applyClientPreset(channel.disguise_preset ?? null, {
+							targetFormat: "openai",
+							parsedBody: channelOpenaiBody,
+							isStream,
+						});
 						applyHeaderPolicy(
 							headers,
 							headerPolicy,
 							channel.custom_headers_json,
 							channel.disguise_headers_json,
+							preset?.headers,
 						);
 
 						let bodyToSend = channelOpenaiBody
 							? JSON.stringify(channelOpenaiBody)
 							: channelRequestText;
-						// Disguise prompt (#7, design §3.1): inject into a per-attempt
-						// shallow copy — the inject function only assigns top-level
-						// fields, so the shared converted body is never mutated.
-						if (disguisePrompt && channelOpenaiBody) {
+						// Disguise prompt (#7, design §3.1) 与预设 body 合规（D5）
+						// 共享同一重写 gate：无预设且无伪装时保持既有字节（零重
+						// 序列化，零回归）。openaiCopy 是每尝试浅拷贝——共享的转换
+						// 产物 channelOpenaiBody 跨重试轮/Key 复用，mutate 必须落在
+						// 拷贝上（inject 只写顶层字段，transform 的 tools 数组在
+						// 引擎内先拷贝再追加，均不污染共享体）。
+						const presetTouchesBody =
+							preset !== null && channelOpenaiBody !== null;
+						if ((disguisePrompt && channelOpenaiBody) || presetTouchesBody) {
 							const openaiCopy: Record<string, unknown> = {
 								...channelOpenaiBody,
 							};
-							injectSystemPromptOpenAI(openaiCopy, disguisePrompt);
-							bodyToSend = JSON.stringify(openaiCopy);
+							let changed = false;
+							if (preset) {
+								changed = preset.transformBody(openaiCopy) || changed;
+								if (preset.forceUpstreamStream && openaiCopy.stream === true) {
+									// 强制流式的 chat 上游同样需要 usage 尾 chunk（上游真
+									// 流式才有 usage 可解析）；stream === true 即形状门禁
+									// 已命中、transformBody 已写流式标记。
+									openaiCopy.stream_options = { include_usage: true };
+									changed = true;
+								}
+							}
+							if (disguisePrompt) {
+								injectSystemPromptOpenAI(openaiCopy, disguisePrompt);
+								changed = true;
+							}
+							if (changed) {
+								bodyToSend = JSON.stringify(openaiCopy);
+							}
 						}
 
 						response = await fetch(target, {
@@ -373,7 +440,14 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 									},
 								});
 							} else {
-								const openaiData = (await response.json()) as Record<
+								// 预设强制上游流式（客户端非流，else 分支即 !isStream）：
+								// 上游 SSE 先聚合为 chat completion 标准非流 JSON，再走
+								// 既有 openai→anthropic 非流转换链（语义零改动）。聚合
+								// 器入口 fail-open：上游未真流式时原样解析，行为不变。
+								const upstream = isStreamForcingPreset(channel.disguise_preset)
+									? await aggregateUpstreamStream("chat", response)
+									: response;
+								const openaiData = (await upstream.json()) as Record<
 									string,
 									unknown
 								>;
@@ -392,12 +466,20 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						headers.set("Authorization", `Bearer ${apiKey}`);
 						headers.set("x-api-key", String(apiKey));
 						headers.set("content-type", "application/json");
+						// 服务端客户端预设：custom 目标仅头生效（协议未知不解释
+						// body，transform no-op、不强制流式，design D2/D5）
+						const preset = applyClientPreset(channel.disguise_preset ?? null, {
+							targetFormat: "custom",
+							parsedBody,
+							isStream,
+						});
 						// custom (#8, design §3.1): body forwarded as-is, headers only
 						applyHeaderPolicy(
 							headers,
 							headerPolicy,
 							channel.custom_headers_json,
 							channel.disguise_headers_json,
+							preset?.headers,
 						);
 
 						response = await fetch(target, {

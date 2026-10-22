@@ -142,8 +142,12 @@ function extractRawUsage(payload: unknown): Record<string, unknown> | null {
  * usage overwrite, absent/null fields keep the previously seen value. Keeps
  * Anthropic native streams' message_start input/cache counters alive when
  * later message_delta chunks only carry output_tokens.
+ *
+ * Exported for services/stream-aggregate.ts: the aggregated anthropic Message
+ * must carry the same non-null-override semantics (message_delta.usage is
+ * cumulative over the message_start baseline — take-and-merge, never add).
  */
-function mergeRawUsage(
+export function mergeRawUsage(
 	acc: Record<string, unknown>,
 	next: Record<string, unknown>,
 ): Record<string, unknown> {

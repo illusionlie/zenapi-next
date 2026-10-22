@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS channels (
   custom_headers_json TEXT,
   disguise_headers_json TEXT,
   disguise_system_prompt TEXT,
+  -- disguise_preset: 服务端客户端预设 ID（白名单见
+  --   services/client-presets.ts CLIENT_PRESET_IDS）；NULL/空 = 不启用
+  --   （迁移 0027 加列，无回填）。预设本体为代码常量，列只存指针。
+  disguise_preset TEXT,
   stream_only INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

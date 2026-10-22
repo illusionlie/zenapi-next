@@ -21,6 +21,10 @@ import {
 	normalizeEndpointOverrides,
 	parseApiFormats,
 } from "../services/channel-types";
+import {
+	CLIENT_PRESET_IDS,
+	isStreamForcingPreset,
+} from "../services/client-presets";
 import { saveChannelAliases } from "../services/model-aliases";
 import {
 	buildModelTestRequestBody,
@@ -33,6 +37,10 @@ import {
 	loadProxySettingsCached,
 	resolveDeveloperNormalizeFlag,
 } from "../services/settings";
+import {
+	aggregateUpstreamStream,
+	protocolForTargetFormat,
+} from "../services/stream-aggregate";
 import { generateToken } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
@@ -64,6 +72,7 @@ type ChannelPayload = {
 	custom_headers?: string;
 	disguise_headers?: string;
 	disguise_system_prompt?: string;
+	disguise_preset?: string;
 	model_aliases?: Record<string, AliasConfig>;
 };
 
@@ -120,6 +129,25 @@ function invalidOverridesError(
 	return {
 		message: key ? `${base} (key: ${key})` : base,
 		code: "invalid_endpoint_overrides",
+	};
+}
+
+/**
+ * disguise_preset 白名单校验（服务端预设是封闭集合）：空 / NULL = 关闭放行，
+ * 非空白值必须命中 CLIENT_PRESET_IDS，非法 400 invalid_disguise_preset
+ * （snake_case，不静默回退）。POST trim-or-null 与 PATCH 三态（undefined
+ * 保留 / 值含空串覆盖）由各端点先行归一，这里只判终值。
+ */
+function isValidDisguisePreset(value: string | null): boolean {
+	return (
+		value === null || (CLIENT_PRESET_IDS as readonly string[]).includes(value)
+	);
+}
+
+function invalidDisguisePresetError(): { message: string; code: string } {
+	return {
+		message: `disguise_preset must be one of [${CLIENT_PRESET_IDS.join(", ")}], or empty to disable`,
+		code: "invalid_disguise_preset",
 	};
 }
 
@@ -277,6 +305,12 @@ channels.post("/", async (c) => {
 	const customHeadersJson = body.custom_headers?.trim() || null;
 	const disguiseHeadersJson = body.disguise_headers?.trim() || null;
 	const disguiseSystemPrompt = body.disguise_system_prompt?.trim() || null;
+	// POST 无 DB 现值：trim-or-null（空 = 不启用），非空白值白名单校验
+	const disguisePreset = body.disguise_preset?.trim() || null;
+	if (!isValidDisguisePreset(disguisePreset)) {
+		const error = invalidDisguisePresetError();
+		return jsonError(c, 400, error.message, error.code);
+	}
 
 	await insertChannel(c.env.DB, {
 		id,
@@ -296,6 +330,7 @@ channels.post("/", async (c) => {
 		custom_headers_json: customHeadersJson,
 		disguise_headers_json: disguiseHeadersJson,
 		disguise_system_prompt: disguiseSystemPrompt,
+		disguise_preset: disguisePreset,
 		created_at: now,
 		updated_at: now,
 	});
@@ -376,6 +411,16 @@ channels.patch("/:id", async (c) => {
 		body.disguise_system_prompt !== undefined
 			? body.disguise_system_prompt?.trim() || null
 			: (current.disguise_system_prompt ?? null);
+	// 三态语义照抄 disguise_headers：undefined 保留现值，具体值（含空串）trim
+	// 后覆盖（空串 = 清除/关闭）；非空白值须命中 CLIENT_PRESET_IDS 白名单
+	const disguisePreset =
+		body.disguise_preset !== undefined
+			? body.disguise_preset?.trim() || null
+			: (current.disguise_preset ?? null);
+	if (!isValidDisguisePreset(disguisePreset)) {
+		const error = invalidDisguisePresetError();
+		return jsonError(c, 400, error.message, error.code);
+	}
 	const baseUrl = normalizeChannelBaseUrl(
 		apiFormats,
 		String(body.base_url ?? current.base_url),
@@ -398,6 +443,7 @@ channels.patch("/:id", async (c) => {
 		custom_headers_json: customHeadersJson,
 		disguise_headers_json: disguiseHeadersJson,
 		disguise_system_prompt: disguiseSystemPrompt,
+		disguise_preset: disguisePreset,
 		updated_at: nowIso(),
 	});
 
@@ -499,6 +545,7 @@ type ModelTestPayload = {
 	custom_headers?: string;
 	disguise_headers?: string;
 	disguise_system_prompt?: string;
+	disguise_preset?: string;
 	model?: string;
 	text?: string;
 };
@@ -579,6 +626,12 @@ channels.post("/test-model", async (c) => {
 		body?.disguise_system_prompt !== undefined
 			? body.disguise_system_prompt?.trim() || null
 			: (dbChannel?.disguise_system_prompt ?? null);
+	// 服务端预设表单即真相：body 提供时 trim-or-null 覆盖，缺席回退 DB 行现值
+	// （非法值不 400——未知 ID 在预设层 fail-open 关闭，测试路径宽松语义）
+	const disguisePreset =
+		body?.disguise_preset !== undefined
+			? body.disguise_preset?.trim() || null
+			: (dbChannel?.disguise_preset ?? null);
 	// 端点覆盖表单即真相：body 提供时按本次生效声明集校验规范化后采用，
 	// 缺席时回退 DB 行现值（与 api_formats 的覆盖语义一致）
 	let endpointOverridesJson: string | null =
@@ -617,6 +670,7 @@ channels.post("/test-model", async (c) => {
 		custom_headers_json: customHeadersJson,
 		disguise_headers_json: disguiseHeadersJson,
 		disguise_system_prompt: disguiseSystemPrompt,
+		disguise_preset: disguisePreset,
 	};
 
 	const { bodyText, parsedBody } = buildModelTestRequestBody(model, text);
@@ -660,14 +714,33 @@ channels.post("/test-model", async (c) => {
 		// 先归一为 OpenAI 风格再解析：anthropic / responses 渠道复用现有
 		// 转换器（非流式），openai / custom 原样透传，保证三种格式得到
 		// 统一回显；仅对 2xx 转换，非 2xx 直接走错误分支
-		const normalized = response.ok
-			? await convertResponse(
-					channelLike,
+		let normalized: Response;
+		if (response.ok) {
+			// 预设强制上游流式（test-model 恒非流式入站，isStream=false）：
+			// 与主代理同构——上游 SSE 先聚合为标准非流 JSON 再喂
+			// convertResponse。免费模型验收路径必须聚合，否则
+			// parseModelTestResponse 读到的是 SSE 文本而非 JSON；聚合器入口
+			// fail-open 覆盖形状门禁未命中（上游未真流式）的场景。
+			let upstream = response;
+			if (
+				response.body &&
+				channelLike.api_format !== "custom" &&
+				isStreamForcingPreset(channelLike.disguise_preset)
+			) {
+				upstream = await aggregateUpstreamStream(
+					protocolForTargetFormat(channelLike.api_format),
 					response,
-					false,
-					"/v1/chat/completions",
-				)
-			: response;
+				);
+			}
+			normalized = await convertResponse(
+				channelLike,
+				upstream,
+				false,
+				"/v1/chat/completions",
+			);
+		} else {
+			normalized = response;
+		}
 		outcome = await parseModelTestResponse(normalized);
 	} catch (error) {
 		outcome = {

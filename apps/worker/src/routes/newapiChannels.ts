@@ -300,6 +300,8 @@ newapi.post("/", async (c) => {
 		custom_headers_json: null,
 		disguise_headers_json: null,
 		disguise_system_prompt: null,
+		// New API 兼容层不透传服务端预设（Out of Scope）：POST 固定 NULL
+		disguise_preset: null,
 		created_at: now,
 		updated_at: now,
 	});
@@ -355,6 +357,9 @@ newapi.put("/", async (c) => {
 		custom_headers_json: current.custom_headers_json ?? null,
 		disguise_headers_json: current.disguise_headers_json ?? null,
 		disguise_system_prompt: current.disguise_system_prompt ?? null,
+		// New API 兼容层不透传服务端预设（Out of Scope）：PUT 保留现值，
+		// 不把管理台配置的预设抹成 NULL
+		disguise_preset: current.disguise_preset ?? null,
 		updated_at: nowIso(),
 	});
 

@@ -4,11 +4,16 @@ import { collectUniqueModelIds } from "../services/channel-models";
 import { selectTargetFormat } from "../services/channel-routing";
 import { parseApiFormats } from "../services/channel-types";
 import { type ChannelRecord, createWeightedOrder } from "../services/channels";
+import { isStreamForcingPreset } from "../services/client-presets";
 import {
 	loadProxyRetryConfig,
 	loadProxySettingsCached,
 	resolveDeveloperNormalizeFlag,
 } from "../services/settings";
+import {
+	aggregateUpstreamStream,
+	protocolForTargetFormat,
+} from "../services/stream-aggregate";
 import { jsonError } from "../utils/http";
 import { parseApiKeys, shuffleArray } from "../utils/keys";
 import { isRetryableStatus, sleep } from "../utils/retry";
@@ -148,9 +153,25 @@ playground.post("/chat", async (c) => {
 					});
 
 					if (response.ok) {
+						// 预设强制上游流式（客户端非流）：与主代理同构——上游 SSE
+						// 先聚合为标准非流 JSON 再喂 convertResponse。聚合器入口
+						// fail-open 覆盖形状门禁未命中（上游未真流式）的场景；
+						// 客户端流式请求不进此分支，流式路径结构不变。
+						let upstream = response;
+						if (
+							!isStream &&
+							response.body &&
+							channel.api_format !== "custom" &&
+							isStreamForcingPreset(channel.disguise_preset)
+						) {
+							upstream = await aggregateUpstreamStream(
+								protocolForTargetFormat(channel.api_format),
+								response,
+							);
+						}
 						lastResponse = await convertResponse(
 							channel,
-							response,
+							upstream,
 							isStream,
 							targetPath,
 						);
