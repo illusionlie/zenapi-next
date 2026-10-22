@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "核对后端质量门禁与 Biome 规遵循"}
+{"file": ".trellis/spec/api-worker-ui/frontend/quality-guidelines.md", "reason": "核对 UI 质量门禁"}
+{"file": ".trellis/spec/api-worker/backend/proxy-headers.md", "reason": "核对头应用顺序扩展未破坏既有四层契约、模板 call-time 解析未被上移、policy=null 豁免语义保持"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "核对聚合产物满足流式不变量的非流对偶:usage 完整三值、anthropic 累计直取不二次累加、tool_calls 不合并错位"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "核对 0027 迁移与 schema.sql 同步"}
+{"file": ".trellis/tasks/10-21-opencode-zen-disguise/research/opencode-zen-fingerprint.md", "reason": "核对实现与门禁矩阵逐项一致:ses 布局正则、v1 头全集、UA 协议分段、msg 回合稳定性"}
