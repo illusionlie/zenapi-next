@@ -259,6 +259,15 @@ type ChannelsViewProps = {
 
 const pageSizeOptions = [10, 20, 50];
 
+/**
+ * 服务端客户端预设（网关每请求实时渲染指纹，渠道行只存 ID 指针）。
+ * ID 白名单与 worker services/client-presets.ts 的 CLIENT_PRESET_IDS 同步——
+ * 预设本体是代码常量不进 DB，UI 仅承载选择与文案。
+ */
+const SERVER_CLIENT_PRESETS: Array<{ id: string; label: string }> = [
+	{ id: "opencode_zen_v1", label: "OpenCode Zen v1（免费档指纹）" },
+];
+
 const baseUrlPlaceholders: Record<ChannelApiFormat, string> = {
 	openai: "https://api.openai.com/v1",
 	anthropic: "https://api.anthropic.com/anthropic",
@@ -541,11 +550,14 @@ export const ChannelsView = ({
 	);
 
 	// —— 客户端伪装（纯 UI 交互：预设覆盖填充 / JSON 失焦校验 / 清空） ——
+	// 快照预设应用 = 关闭服务端预设（互斥：disguise_preset 置空，指纹改由
+	// 下方可编辑的快照头/提示词承载）
 	const applyPreset = useCallback(
 		(preset: ClientPreset) => {
 			onFormChange({
 				disguise_headers: JSON.stringify(preset.headers, null, 2),
 				disguise_system_prompt: preset.systemPrompt,
+				disguise_preset: "",
 			});
 			setAppliedPresetId(preset.id);
 			setDisguiseHeadersInvalid(false);
@@ -570,7 +582,11 @@ export const ChannelsView = ({
 	}, [channelForm.disguise_headers]);
 
 	const clearDisguise = useCallback(() => {
-		onFormChange({ disguise_headers: "", disguise_system_prompt: "" });
+		onFormChange({
+			disguise_headers: "",
+			disguise_system_prompt: "",
+			disguise_preset: "",
+		});
 		setAppliedPresetId(null);
 		setDisguiseHeadersInvalid(false);
 	}, [onFormChange]);
@@ -1243,25 +1259,49 @@ export const ChannelsView = ({
 							<select
 								class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
 								id="channel-disguise-preset"
-								value=""
+								value={channelForm.disguise_preset}
 								onChange={(event) => {
 									const id = (event.currentTarget as HTMLSelectElement).value;
+									// 服务端预设：仅置 form.disguise_preset（网关实时渲染），
+									// 不灌下方快照 textareas
+									if (SERVER_CLIENT_PRESETS.some((p) => p.id === id)) {
+										onFormChange({ disguise_preset: id });
+										return;
+									}
+									// 快照预设：保持既有 applyPreset 行为（互斥清空服务端
+									// 预设）；「无预设」仅清服务端预设，不动快照字段
 									const preset = CLIENT_PRESETS.find((p) => p.id === id);
 									if (preset) applyPreset(preset);
+									else onFormChange({ disguise_preset: "" });
 								}}
 							>
-								<option value="">选择预设客户端…</option>
-								{CLIENT_PRESETS.map((preset) => (
-									<option key={preset.id} value={preset.id}>
-										{preset.name}
-										{preset.testing ? "（测试）" : ""}
-									</option>
-								))}
+								<option value="">无预设</option>
+								<optgroup label="服务端预设（网关实时渲染）">
+									{SERVER_CLIENT_PRESETS.map((preset) => (
+										<option key={preset.id} value={preset.id}>
+											{preset.label}
+										</option>
+									))}
+								</optgroup>
+								<optgroup label="快照预设（填入下方可编辑）">
+									{CLIENT_PRESETS.map((preset) => (
+										<option key={preset.id} value={preset.id}>
+											{preset.name}
+											{preset.testing ? "（测试）" : ""}
+										</option>
+									))}
+								</optgroup>
 							</select>
 							<p class="mt-1 text-xs text-stone-400">
 								选中预设即用其快照值覆盖填充下方两字段（可再手工微调）；（测试）=
 								指纹存在未验证环节，建议实测验证后再投入使用。
 							</p>
+							{channelForm.disguise_preset !== "" && (
+								<p class="mt-1 text-xs leading-relaxed text-amber-600">
+									指纹由网关每请求实时渲染（会话稳定 ID / 按协议 UA / body
+									合规），下方伪装头与提示词可叠加覆盖。
+								</p>
+							)}
 							{appliedPresetNote && (
 								<p class="mt-1 text-xs leading-relaxed text-stone-400">
 									预设快照说明：{appliedPresetNote}

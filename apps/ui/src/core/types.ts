@@ -19,6 +19,8 @@ export type Channel = {
 	disguise_headers_json?: string | null;
 	/** 伪装系统提示词（前置注入的首条 system；NULL/空 = 不伪装） */
 	disguise_system_prompt?: string | null;
+	/** 服务端客户端预设 ID（网关实时渲染指纹；NULL/空 = 不启用） */
+	disguise_preset?: string | null;
 };
 
 /** fetch_models / :id/test 响应中的逐格式探测结果 */
@@ -306,6 +308,8 @@ export type ChannelForm = {
 	disguise_headers: string;
 	/** 伪装系统提示词（纯文本；空串 = 不伪装） */
 	disguise_system_prompt: string;
+	/** 服务端客户端预设 ID（网关实时渲染指纹；空串 = 无预设） */
+	disguise_preset: string;
 	models: string;
 };
 

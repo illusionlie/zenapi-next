@@ -479,6 +479,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				custom_headers: channel.custom_headers_json ?? "",
 				disguise_headers: channel.disguise_headers_json ?? "",
 				disguise_system_prompt: channel.disguise_system_prompt ?? "",
+				disguise_preset: channel.disguise_preset ?? "",
 				models: modelsList,
 			});
 			// Initialize alias state from per-channel alias map for this channel's models
@@ -570,6 +571,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 					// 伪装字段恒传 trim 后的字符串：PATCH 空串 = 清除现值（AC1 清空保存即关闭伪装）
 					disguise_headers: channelForm.disguise_headers.trim(),
 					disguise_system_prompt: channelForm.disguise_system_prompt.trim(),
+					// 服务端预设同构透传：空串 = 关闭预设（后端 trim-or-null），
+					// 白名单值 = 启用；与快照伪装头/提示词互斥由表单交互保证
+					disguise_preset: channelForm.disguise_preset.trim(),
 					models: modelsArray.length > 0 ? modelsArray : undefined,
 					model_aliases:
 						Object.keys(aliasPayload).length > 0 ? aliasPayload : undefined,
@@ -880,6 +884,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 						custom_headers: channelForm.custom_headers.trim(),
 						disguise_headers: channelForm.disguise_headers.trim(),
 						disguise_system_prompt: channelForm.disguise_system_prompt.trim(),
+						// 表单即真相：服务端预设随测试请求透传（免费模型验收路径
+						// test-model 必须与主代理渲染同一指纹）
+						disguise_preset: channelForm.disguise_preset.trim(),
 						model,
 						text,
 					}),

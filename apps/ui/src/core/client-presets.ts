@@ -634,7 +634,8 @@ export const CLIENT_PRESETS: ClientPreset[] = [
 			"x-opencode-request/session 为动态模板占位符，网关每上游请求实时生成（内嵌当前毫秒时间戳，格式与源码算法逐字节兼容）；" +
 			"UA 双版本号（ai-sdk/provider-utils、runtime/bun）随 opencode 发布漂移，需手工刷新；" +
 			"提示词 env 块与模型行为中性快照值（日期/目录/模型名非真实值），均可手改。" +
-			"⚠ 不适用于 opencode zen 免费额度——其校验已含 body 规则（stream:true + bash tool + tools≥2），超出头部伪装能力范围。",
+			"⚠ 不适用于 opencode zen 免费额度——其校验已含 body 规则（stream:true + bash tool + tools≥2），超出头部伪装能力范围；" +
+			"该场景请改用渠道表单「服务端预设」分组的 opencode_zen_v1（网关每请求实时渲染会话稳定 ID / 按协议 UA / body 合规的完整指纹，本快照保留作通用头部伪装）。",
 	},
 	{
 		id: "claude-code",
