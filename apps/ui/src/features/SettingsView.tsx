@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "hono/jsx/dom";
 import type { InviteCode, RegistrationMode, SettingsForm } from "../core/types";
+import { ToggleSwitch } from "./ToggleSwitch";
 
 type SettingsViewProps = {
 	settingsForm: SettingsForm;
@@ -241,15 +242,16 @@ export const SettingsView = ({
 						/>
 					</div>
 					<div class="flex items-end">
-						<label class="flex items-center gap-2 text-sm text-stone-700">
-							<input
-								type="checkbox"
-								class="h-4 w-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400"
+						<label
+							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"
+							for="setting-require-invite-code"
+						>
+							<ToggleSwitch
+								id="setting-require-invite-code"
 								checked={settingsForm.require_invite_code === "true"}
-								onChange={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
+								onChange={(checked) => {
 									onFormChange({
-										require_invite_code: target?.checked ? "true" : "false",
+										require_invite_code: checked ? "true" : "false",
 									});
 								}}
 							/>
@@ -260,15 +262,16 @@ export const SettingsView = ({
 						<h4 class="mb-3 text-sm font-semibold text-stone-700">
 							LDC 支付设置
 						</h4>
-						<label class="flex items-center gap-2 text-sm text-stone-700">
-							<input
-								type="checkbox"
-								class="h-4 w-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400"
+						<label
+							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"
+							for="setting-ldc-payment-enabled"
+						>
+							<ToggleSwitch
+								id="setting-ldc-payment-enabled"
 								checked={settingsForm.ldc_payment_enabled === "true"}
-								onChange={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
+								onChange={(checked) => {
 									onFormChange({
-										ldc_payment_enabled: target?.checked ? "true" : "false",
+										ldc_payment_enabled: checked ? "true" : "false",
 									});
 								}}
 							/>
@@ -374,16 +377,17 @@ export const SettingsView = ({
 						<h4 class="mb-3 text-sm font-semibold text-stone-700">
 							Turnstile 人机验证
 						</h4>
-						<label class="flex items-center gap-2 text-sm text-stone-700">
-							<input
-								type="checkbox"
-								class="h-4 w-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+						<label
+							class={`flex items-center gap-2.5 text-sm text-stone-700 ${turnstileToggleDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+							for="setting-turnstile-enabled"
+						>
+							<ToggleSwitch
+								id="setting-turnstile-enabled"
 								checked={settingsForm.turnstile_enabled === "true"}
 								disabled={turnstileToggleDisabled}
-								onChange={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
+								onChange={(checked) => {
 									onFormChange({
-										turnstile_enabled: target?.checked ? "true" : "false",
+										turnstile_enabled: checked ? "true" : "false",
 									});
 								}}
 							/>
@@ -550,17 +554,16 @@ export const SettingsView = ({
 						</p>
 					</div>
 					<div class="lg:col-span-2">
-						<label class="flex items-center gap-2 text-sm text-stone-700">
-							<input
-								type="checkbox"
-								class="h-4 w-4 rounded border-stone-300 text-amber-500 focus:ring-amber-400"
+						<label
+							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"
+							for="setting-normalize-developer-role"
+						>
+							<ToggleSwitch
+								id="setting-normalize-developer-role"
 								checked={settingsForm.normalize_developer_role === "true"}
-								onChange={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
+								onChange={(checked) => {
 									onFormChange({
-										normalize_developer_role: target?.checked
-											? "true"
-											: "false",
+										normalize_developer_role: checked ? "true" : "false",
 									});
 								}}
 							/>
