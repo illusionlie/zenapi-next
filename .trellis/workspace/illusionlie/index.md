@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
-- **Last Active**: 2026-10-22
+- **Total Sessions**: 20
+- **Last Active**: 2026-10-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~681 | Active |
+| `journal-1.md` | ~704 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-10-23 | 流式延迟口径修复：TTFT 锚定请求起点 + latency_ms 含流时长 | `517c6b1`, `e732ead`, `f196758` | `main` |
 | 19 | 2026-10-22 | OpenCode Zen 免费额度真身伪装：服务端预设引擎落地并实测通过 | `6b89caa`, `227e5e6`, `cbf0c9a`, `57411ab`, `91b8aac` | `main` |
 | 18 | 2026-10-21 | 管理台使用日志详情展开视图 | `add2548`, `10a0eb8` | `main` |
 | 17 | 2026-09-29 | 新增 Claude Code 客户端伪装预设 | `3eccf76`, `666c6fa` | `main` |

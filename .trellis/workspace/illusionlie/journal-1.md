@@ -679,3 +679,26 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 流式延迟口径修复：TTFT 锚定请求起点 + latency_ms 含流时长
+
+**Date**: 2026-10-23
+**Task**: 流式延迟口径修复：TTFT 锚定请求起点 + latency_ms 含流时长
+**Branch**: `main`
+
+### Summary
+
+调查使用日志 TTFT==总用时/0.00s 双形态：非流式为设计常量，流式系 parseUsageFromSse 调用时刻锚（响应头之后）+ convertResponse 流式分支不消费 body 所致。修复：parseUsageFromSse 增可选请求起点参数与 elapsedMs 返回，两代理流式路径第三参覆盖 latency_ms（TTFB→总时长），回退/非流式零漂移；fake-timers 确定性测试 +2，全量 729 绿；AGENTS.md §8 延迟口径从句 + usage-accounting spec §10；biome 簿记重排归档 task.json。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `517c6b1` | (see git log) |
+| `e732ead` | (see git log) |
+| `f196758` | (see git log) |
+
+### Status
+
+[OK] **Completed**
