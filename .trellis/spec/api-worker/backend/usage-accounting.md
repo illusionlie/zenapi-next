@@ -187,3 +187,61 @@ runDailyMaintenance(env): Promise<void>;  // cron 四步：自愈扫窗（含昨
 ### 9.4 Tests Required
 
 `tests/usage-stats.test.ts`（node:sqlite 适配器）：rollup 幂等与防丢守卫（无原始行 + 有 rollup 行 → 重跑行存值不变；空集照常写）、日切边界、`rawSummaryTotals` legacy SQL 与两段并集逐项相等（80/110 cache 分母锚点）、prune 循环终止/可重入、runDailyMaintenance 单步失败不阻断。2026-10-21 增：短窗口 raw-only 单测族（1d/15m 跨午夜/历史子日/7d 回归/east+west 时区探针）与 split==raw-only 逐字段等价、保险丝（chunk=10/maxRounds=2/35 行 → {deleted:20, complete:false}）、自愈扫窗（缺 2 天恰补 2 天、在场日零写 marker 断言、单日失败容错）、retentionCutoffIso 固定字符串断言、rollupMissingDates 差集。部署后人工步骤：`POST /api/dashboard/rollup` 空体全量回填 → cron 接管；`wrangler dev --test-scheduled` 观察四步日志。
+
+## 10. 延迟口径锚点契约（2026-10-23 增补）
+
+### 10.1 Scope / Trigger
+
+- 触发：改动 `parseUsageFromSse` 签名、TTFT / `latency_ms` 口径、`usage_logs` 延迟列语义。解析器签名 + 跨层（worker→UI/监测）数据语义变更，code-spec 深度强制。
+
+### 10.2 Signatures
+
+```ts
+// utils/usage.ts
+type StreamUsage = {
+	usage: NormalizedUsage | null;
+	firstTokenLatencyMs: number | null; // 锚点 → 首条 SSE data 行
+	elapsedMs: number | null;           // 锚点 → 流尾；无响应体时为 null
+};
+parseUsageFromSse(response: Response, requestStartMs?: number): Promise<StreamUsage>;
+// requestStartMs 缺省回退 Date.now()（调用时刻）——单参数旧直调兼容是硬约束
+```
+
+### 10.3 Contracts
+
+- **TTFT 锚定请求起点**（proxy `start` :907 / anthropic `start` :218，均在重试循环之前）：含重试/换渠道时间，用户体感口径（2026-10-23 用户裁定）；渠道质量评估另有监测页独立统计，不混用。
+- **流式 `latency_ms` 流尾取值**：流式成功路径经 `record`/`recordFn` 第三参 `streamLatencyMs ?? latencyMs` 覆盖——TTFB→总时长口径变更，部署后与历史 rollup 行存在台阶，随 180d 保留期老化消失。
+- **回退恒等**：SSE 解析 catch 分支与非流式路径不传第三参，headers latency + 既有 TTFT 行为字节级不变；无 body → `{usage: null, ttft: null, elapsedMs: null}`，`??` 落回 headers latency。
+- **非流式 TTFT ≡ `latencyMs` 是设计常量**（proxy :1084/:1131、anthropic :576/:636）：非流式整包到达无可观测首 token 时刻；强制流式聚合（客户端非流式）同属此类，网关侧上游 TTFT 不透出（范围外裁定）。
+- **Workers 时钟语义**：`Date.now()` 只在 I/O 边界前进——流读取是 I/O，流内取差值真实；空候选（404/503）在落库前提前返回，不存在零 I/O 的 `latency_ms = 0` 行。
+
+### 10.4 Validation & Error Matrix
+
+| 条件 | 行为 |
+|------|------|
+| 无响应体 | 三字段 null，`elapsedMs` 经 `??` 落回 headers latency |
+| SSE 解析 throw（流中断等） | catch → `record(immediateUsage, null)`（不传第三参）→ headers latency + TTFT null |
+| 流式错误体（非 200 但走 `.then` 路径） | 也用 `elapsedMs` 记 `latency_ms`（起点→错误体读完，毫秒级差异）；TTFT 仍 null。备查非缺陷 |
+
+### 10.5 Tests Required
+
+`tests/usage-cache.test.ts`「latency anchors (fake timers)」：`vi.useFakeTimers({ toFake: ["Date"] })` + pull 驱动 `ReadableStream` 在 `pull()` 内拨钟（消费同步，`Date.now()` 精确落标记）；锚点公式推导断言 t0+500 首 data 行 → TTFT=500、t0+1200 流尾 → elapsed=1200；冻结时钟单参调用 TTFT/elapsed=0 锁旧语义；`finally` 恢复真实时钟。既有 5 个单参直调测试文件断言零改动即绿。
+
+### 10.6 Wrong vs Correct
+
+#### Wrong（修复前）
+
+```ts
+const start = Date.now(); // parseUsageFromSse 内部取——调用时刻锚，已在响应头之后
+// TTFT 只量到「响应头 → 首条 data 行」的 SSE 分帧延迟（几 ms，UI 渲染 0.00s）；
+// 真实模型首 token 等待被计进 latency_ms（上游首 token 就绪才 flush 响应头），
+// 而 latency_ms 本身又不含流传输时长（convertResponse 流式分支只 pipeThrough 不消费 body）
+```
+
+#### Correct
+
+```ts
+parseUsageFromSse(lastResponse.clone(), start) // 请求起点透传（epoch ms）
+// 首条 data 行：firstTokenLatencyMs = now - start（含重试/换渠道）
+// 流尾：elapsedMs = now - start → 第三参覆盖 latency_ms
+```
