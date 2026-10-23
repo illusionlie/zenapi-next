@@ -11,6 +11,8 @@ export type NormalizedUsage = {
 export type StreamUsage = {
 	usage: NormalizedUsage | null;
 	firstTokenLatencyMs: number | null;
+	// 锚点 → 流尾的完整耗时（流式 latency_ms 口径）；无响应体时为 null。
+	elapsedMs: number | null;
 };
 
 function toNumber(value: unknown): number | null {
@@ -209,15 +211,18 @@ export function parseUsageFromHeaders(
 
 export async function parseUsageFromSse(
 	response: Response,
+	requestStartMs?: number,
 ): Promise<StreamUsage> {
 	if (!response.body) {
-		return { usage: null, firstTokenLatencyMs: null };
+		return { usage: null, firstTokenLatencyMs: null, elapsedMs: null };
 	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let rawUsage: Record<string, unknown> | null = null;
-	const start = Date.now();
+	// TTFT / elapsed 锚点：传入请求起点（epoch ms）时含重试/换渠道时间；
+	// 缺省回退为调用时刻（旧语义，供既有单参数直调兼容）。
+	const start = requestStartMs ?? Date.now();
 	let firstTokenLatencyMs: number | null = null;
 
 	const consumeLinePayload = (payload: string) => {
@@ -256,8 +261,11 @@ export async function parseUsageFromSse(
 		consumeLinePayload(remaining.slice(5).trim());
 	}
 
+	const elapsedMs = Date.now() - start;
+
 	return {
 		usage: rawUsage ? normalizeUsage(rawUsage) : null,
 		firstTokenLatencyMs,
+		elapsedMs,
 	};
 }

@@ -603,6 +603,10 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 		const recordFn = async (
 			usage: NormalizedUsage | null,
 			firstTokenLatencyMs?: number | null,
+			// 流式成功路径传入「起点 → 流尾」总时长（parseUsageFromSse 的
+			// elapsedMs），替代 headers 时刻的 latencyMs；SSE 解析失败回退与
+			// 非流式路径不传，保持旧值。
+			streamLatencyMs?: number | null,
 		) => {
 			const normalized = usage ?? {
 				totalTokens: 0,
@@ -631,7 +635,7 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 				cachedInputTokens: normalized.cachedInputTokens,
 				cacheCreationTokens: normalized.cacheCreationTokens,
 				cost,
-				latencyMs,
+				latencyMs: streamLatencyMs ?? latencyMs,
 				firstTokenLatencyMs:
 					firstTokenLatencyMs ?? (isStream ? null : latencyMs),
 				stream: isStream,
@@ -644,10 +648,14 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 		const headerUsage = parseUsageFromHeaders(lastResponse.headers);
 
 		if (isStream) {
-			const task = parseUsageFromSse(lastResponse.clone())
+			const task = parseUsageFromSse(lastResponse.clone(), start)
 				.then((streamUsage) => {
 					const usage = headerUsage ?? streamUsage.usage;
-					return recordFn(usage, streamUsage.firstTokenLatencyMs);
+					return recordFn(
+						usage,
+						streamUsage.firstTokenLatencyMs,
+						streamUsage.elapsedMs,
+					);
 				})
 				.catch(async () => {
 					// SSE parsing failed (stream interrupted, etc.) — still record with whatever we have

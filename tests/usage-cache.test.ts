@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { D1Database } from "@cloudflare/workers-types";
 import dashboardApp from "../apps/worker/src/routes/dashboard";
 import { recordUsage } from "../apps/worker/src/services/usage";
@@ -286,6 +286,106 @@ describe("parseUsageFromSse - field-wise usage merge", () => {
 			cachedInputTokens: 3,
 			cacheCreationTokens: null,
 		});
+	});
+});
+
+describe("parseUsageFromSse - latency anchors (fake timers)", () => {
+	// Pull-driven stream: every pull advances the fake clock to the chunk's
+	// mark before enqueueing; per-chunk consumption inside the parser is
+	// synchronous, so its Date.now() reads land exactly on these marks.
+	function timedSseStream(
+		chunks: Array<{ atMs: number; text: string }>,
+		t0: number,
+	): ReadableStream<Uint8Array> {
+		const encoder = new TextEncoder();
+		let next = 0;
+		return new ReadableStream<Uint8Array>({
+			pull(controller) {
+				const chunk = chunks[next];
+				if (!chunk) {
+					controller.close();
+					return;
+				}
+				next += 1;
+				vi.setSystemTime(t0 + chunk.atMs);
+				controller.enqueue(encoder.encode(chunk.text));
+			},
+		});
+	}
+
+	it("anchors TTFT at the request start and elapsed at the stream end", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			const t0 = Date.parse("2026-10-23T00:00:00.000Z");
+			vi.setSystemTime(t0);
+			// Timeline from the anchor formulas: first data line at t0+500ms
+			// → firstTokenLatencyMs = 500; stream end at t0+1200ms
+			// → elapsedMs = 1200.
+			const response = new Response(
+				timedSseStream(
+					[
+						{
+							atMs: 500,
+							text: 'data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}\n\n',
+						},
+						{
+							atMs: 1200,
+							text: [
+								'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}',
+								"",
+								"data: [DONE]",
+								"",
+							].join("\n"),
+						},
+					],
+					t0,
+				),
+				{ headers: { "content-type": "text/event-stream" } },
+			);
+
+			const { usage, firstTokenLatencyMs, elapsedMs } = await parseUsageFromSse(
+				response,
+				t0,
+			);
+
+			expect(firstTokenLatencyMs).toBe(500);
+			expect(elapsedMs).toBe(1200);
+			expect(usage).toEqual({
+				totalTokens: 10,
+				promptTokens: 9,
+				completionTokens: 1,
+				cachedInputTokens: null,
+				cacheCreationTokens: null,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("without a request start, both anchors fall back to the invocation moment", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(Date.parse("2026-10-23T00:00:00.000Z"));
+			const body = [
+				'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}',
+				"",
+				"data: [DONE]",
+				"",
+			].join("\n");
+			// Legacy single-arg call sites: the fake clock never advances during
+			// the buffered read, so TTFT and elapsed both measure 0ms from the
+			// invocation moment — the pre-change behavior, unchanged.
+			const { firstTokenLatencyMs, elapsedMs } = await parseUsageFromSse(
+				new Response(body, {
+					headers: { "content-type": "text/event-stream" },
+				}),
+			);
+
+			expect(firstTokenLatencyMs).toBe(0);
+			expect(elapsedMs).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

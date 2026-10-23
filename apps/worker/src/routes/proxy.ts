@@ -1111,6 +1111,10 @@ proxy.all("/*", tokenAuth, async (c) => {
 		const record = async (
 			usage: NormalizedUsage | null,
 			firstTokenLatencyMs?: number | null,
+			// 流式成功路径传入「起点 → 流尾」总时长（parseUsageFromSse 的
+			// elapsedMs），替代 headers 时刻的 latencyMs；SSE 解析失败回退与
+			// 非流式路径不传，保持旧值。
+			streamLatencyMs?: number | null,
 		) => {
 			const normalized = usage ?? {
 				totalTokens: 0,
@@ -1141,7 +1145,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 				cachedInputTokens: normalized.cachedInputTokens,
 				cacheCreationTokens: normalized.cacheCreationTokens,
 				cost,
-				latencyMs,
+				latencyMs: streamLatencyMs ?? latencyMs,
 				firstTokenLatencyMs: resolvedFirstTokenLatencyMs,
 				stream: isStream,
 				reasoningEffort,
@@ -1188,7 +1192,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 				: "none";
 
 		if (isStream) {
-			const task = parseUsageFromSse(lastResponse.clone())
+			const task = parseUsageFromSse(lastResponse.clone(), start)
 				.then((streamUsage) => {
 					const usageValue = immediateUsage ?? streamUsage.usage;
 					const source = immediateUsage
@@ -1197,7 +1201,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 							? "sse"
 							: "sse-none";
 					logUsage("stream", usageValue, source);
-					return record(usageValue, streamUsage.firstTokenLatencyMs);
+					return record(
+						usageValue,
+						streamUsage.firstTokenLatencyMs,
+						streamUsage.elapsedMs,
+					);
 				})
 				.catch(async () => {
 					// SSE parsing failed (stream interrupted, etc.) — still record with whatever we have
