@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "本任务核心域：usage 解析/落库口径与计费批次契约"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "流式不变量与 usage 末 chunk 惯例，SSE 测试 fixture 参照"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁与测试约定（vitest run、biome）"}
