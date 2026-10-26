@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "迁移规范（0031 webhooks）"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "数值/布尔两级 settings 契约（五新键）"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "usage_logs status 口径（报警聚合数据源）"}
+{"file": ".trellis/spec/api-worker/backend/directory-structure.md", "reason": "新路由挂载与鉴权边界"}
