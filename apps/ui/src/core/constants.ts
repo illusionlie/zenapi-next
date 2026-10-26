@@ -52,6 +52,7 @@ export const initialChannelForm: ChannelForm = {
 	disguise_headers: "",
 	disguise_system_prompt: "",
 	disguise_preset: "",
+	probe_enabled: false,
 	models: "",
 };
 
