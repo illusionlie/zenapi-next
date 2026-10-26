@@ -49,6 +49,22 @@ buildChannelRequest(channel, targetPath, querySuffix, incomingHeaders,
 	requestText, parsedBody, isStream, apiKey?, policy?, disguisePrompt?)
 ```
 
+### 2a. 基础剥离层（10-26-privacy-header-strip 起）
+
+`buildChannelRequest`（proxy.ts，proxy / anthropic-proxy / playground 三调用方共享
+收口点）在 `new Headers(incomingHeaders)` 全量复制后、`applyHeaderPolicy` 五层
+**之前**，按代码常量 `STRIPPED_CLIENT_HEADERS`（proxy.ts，12 项）默认剔除：
+`cf-connecting-ip / cf-ipcountry / cf-visitor / cf-ray / cf-worker / true-client-ip /
+x-forwarded-for / x-forwarded-proto / x-forwarded-host / x-real-ip / cdn-loop / cookie`。
+
+- **动机**：入站头全量复制会把 CF 边缘注入的身份/转发头与 cookie 原样发给上游，
+  泄露终端用户真实 IP。
+- **层序语义**：剥离先行、全局注入后应用——settings `proxy_extra_headers` 显式配置
+  同名头仍可加回（管理员意图优先）；预设/伪装/custom 层在其后不受影响。
+- **边界**：仅应用层；Workers 出站连接自身的平台特征（出口 IP 段等）不可去除。
+- v1 固定常量不做可配置；新增头名直接改常量 + 同步
+  `tests/privacy-header-strip.test.ts` 清单。
+
 ### 3. Contracts
 
 - settings KV（无迁移，key 缺失 = 空配置）：

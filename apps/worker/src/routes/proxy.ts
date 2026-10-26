@@ -145,6 +145,28 @@ function isConvertedChatPath(path: string): boolean {
 }
 
 /**
+ * Client pass-through headers stripped by default before the five-layer
+ * header policy: CF edge identity/forwarding headers and cookies would
+ * otherwise leak the end-user IP to the upstream provider. Literal list
+ * (v1 not configurable); global inject (settings extra headers) applies
+ * later and can still re-add any of them explicitly.
+ */
+const STRIPPED_CLIENT_HEADERS = [
+	"cf-connecting-ip",
+	"cf-ipcountry",
+	"cf-visitor",
+	"cf-ray",
+	"cf-worker",
+	"true-client-ip",
+	"x-forwarded-for",
+	"x-forwarded-proto",
+	"x-forwarded-host",
+	"x-real-ip",
+	"cdn-loop",
+	"cookie",
+] as const;
+
+/**
  * Builds per-channel fetch target and body based on channel api_format.
  * Returns the target URL, headers, and request body.
  * `channel.api_format` is the selected **target format**: the proxy /
@@ -193,6 +215,14 @@ export function buildChannelRequest(
 	const headers = new Headers(incomingHeaders);
 	headers.delete("host");
 	headers.delete("content-length");
+	// 客户端入站头的全量复制会带上 CF 边缘注入的身份/转发头与 cookie，
+	// 原样发给上游等于泄露终端用户真实 IP。此处按固定清单剥离（大小写不
+	// 敏感，与 headers.delete 同语义）；发生在 applyHeaderPolicy 五层之前，
+	// 全局注入（settings extra headers）仍可显式加回（管理员意图优先）。
+	// 仅应用层——Workers 出站连接自身的平台特征（出口 IP 段等）不可去除。
+	for (const name of STRIPPED_CLIENT_HEADERS) {
+		headers.delete(name);
+	}
 	// 服务端客户端预设：每请求求值一次（headers 内含当次派生的会话/消息 ID）。
 	// NULL/未知 ID 在引擎内首行短路返回 null——无预设路径不做任何额外工作。
 	const preset = applyClientPreset(channel.disguise_preset ?? null, {
