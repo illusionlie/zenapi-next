@@ -715,4 +715,4 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 
 ### Status
 
-[Continuing] 批次 3/8 完成（count_tokens + 隐私头 + 令牌过期，均已提交归档），余 5 子任务排队（rate-limiting 下一个，复杂任务需先写 design+implement）
+[Continuing] 批次 4/8 完成（count_tokens / 隐私头 / 令牌过期 / 限流，均已提交归档），余 4 子任务排队（key-cooldown-stats 下一个）。限流任务两段式：首代理限额中断留 worker 侧半成品，续做代理审计采纳 + 补 settings.ts 断点（GET 未进响应体/PUT 无分支/未用 import）+ UI + 文档；PRD 曾有 rpm_limit NULL=不限 缺陷致全局默认对存量令牌失效，design 阶段修正为 NULL=跟随默认/0=显式豁免
