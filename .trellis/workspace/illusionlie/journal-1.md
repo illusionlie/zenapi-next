@@ -715,4 +715,4 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 
 ### Status
 
-[Continuing] 批次 1/8 完成，余 7 子任务排队（privacy-header-strip 下一个）
+[Continuing] 批次 2/8 完成（count_tokens + 隐私头剥离，均已提交归档），余 6 子任务排队（token-expiry 下一个）
