@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "迁移与 schema 同步规范（0030 key_tag）"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "recordUsage/计费 batch 原子性契约，key_tag 透传不得破坏"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "渠道候选/目标格式链路背景（key 循环位于其后）"}
