@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	resolveExpiresAtValue,
+	resolveRpmLimitValue,
 	resolveTokenUpdate,
 	resolveUserTokenUpdate,
 } from "../apps/worker/src/services/token-update";
@@ -17,6 +18,7 @@ const existing: ExistingToken = {
 	allowed_channels: '["ch1"]',
 	allowed_models: '["gpt-4o"]',
 	expires_at: "2099-01-01T00:00:00.000Z",
+	rpm_limit: 60,
 };
 
 const valuesOf = (body: unknown) => {
@@ -70,6 +72,7 @@ describe("resolveTokenUpdate", () => {
 			expect(values.allowed_channels).toBe('["ch1"]');
 			expect(values.allowed_models).toBe('["gpt-4o"]');
 			expect(values.expires_at).toBe("2099-01-01T00:00:00.000Z");
+			expect(values.rpm_limit).toBe(60);
 		});
 	});
 
@@ -302,6 +305,46 @@ describe("resolveTokenUpdate", () => {
 		});
 	});
 
+	describe("rpm_limit", () => {
+		it("keeps the existing value for undefined", () => {
+			expect(valuesOf({}).rpm_limit).toBe(60);
+		});
+
+		it("clears to NULL (follow global default) for null and empty string", () => {
+			expect(valuesOf({ rpm_limit: null }).rpm_limit).toBeNull();
+			expect(valuesOf({ rpm_limit: "" }).rpm_limit).toBeNull();
+		});
+
+		it("sets 0 (explicit exemption) and positive integers", () => {
+			expect(valuesOf({ rpm_limit: 0 }).rpm_limit).toBe(0);
+			expect(valuesOf({ rpm_limit: 1 }).rpm_limit).toBe(1);
+			expect(valuesOf({ rpm_limit: 1_000_000 }).rpm_limit).toBe(1_000_000);
+		});
+
+		it("rejects negative / fractional / non-number values", () => {
+			expect(resolveTokenUpdate({ rpm_limit: -1 }, existing)).toEqual({
+				ok: false,
+				error: "invalid_rpm_limit",
+			});
+			expect(resolveTokenUpdate({ rpm_limit: 1.5 }, existing)).toEqual({
+				ok: false,
+				error: "invalid_rpm_limit",
+			});
+			expect(resolveTokenUpdate({ rpm_limit: "60" }, existing)).toEqual({
+				ok: false,
+				error: "invalid_rpm_limit",
+			});
+			expect(resolveTokenUpdate({ rpm_limit: NaN }, existing)).toEqual({
+				ok: false,
+				error: "invalid_rpm_limit",
+			});
+			expect(resolveTokenUpdate({ rpm_limit: Infinity }, existing)).toEqual({
+				ok: false,
+				error: "invalid_rpm_limit",
+			});
+		});
+	});
+
 	describe("combined updates", () => {
 		it("applies several valid fields in one pass", () => {
 			const values = valuesOf({
@@ -312,6 +355,7 @@ describe("resolveTokenUpdate", () => {
 				allowed_channels: null,
 				allowed_models: ["claude-sonnet-4"],
 				expires_at: null,
+				rpm_limit: 0,
 			});
 			expect(values).toEqual({
 				name: "renamed",
@@ -321,6 +365,7 @@ describe("resolveTokenUpdate", () => {
 				allowed_channels: null,
 				allowed_models: '["claude-sonnet-4"]',
 				expires_at: null,
+				rpm_limit: 0,
 			});
 		});
 
@@ -329,6 +374,7 @@ describe("resolveTokenUpdate", () => {
 			expect(existing.quota_total).toBe(100);
 			expect(existing.name).toBe("old-name");
 			expect(existing.expires_at).toBe("2099-01-01T00:00:00.000Z");
+			expect(existing.rpm_limit).toBe(60);
 		});
 	});
 });
@@ -338,6 +384,7 @@ const userExisting: UserExistingToken = {
 	status: "active",
 	allowed_models: '["gpt-4o"]',
 	expires_at: "2099-01-01T00:00:00.000Z",
+	rpm_limit: 30,
 };
 
 const userValuesOf = (body: unknown) => {
@@ -497,19 +544,49 @@ describe("resolveUserTokenUpdate", () => {
 		});
 	});
 
+	describe("rpm_limit", () => {
+		it("keeps the existing value for undefined", () => {
+			expect(userValuesOf({}).rpm_limit).toBe(30);
+		});
+
+		it("clears to NULL (follow global default) for null and empty string", () => {
+			expect(userValuesOf({ rpm_limit: null }).rpm_limit).toBeNull();
+			expect(userValuesOf({ rpm_limit: "" }).rpm_limit).toBeNull();
+		});
+
+		it("sets 0 (explicit exemption) and positive integers", () => {
+			expect(userValuesOf({ rpm_limit: 0 }).rpm_limit).toBe(0);
+			expect(userValuesOf({ rpm_limit: 120 }).rpm_limit).toBe(120);
+		});
+
+		it("rejects negative / fractional / non-number values", () => {
+			expect(
+				resolveUserTokenUpdate({ rpm_limit: -3 }, userExisting),
+			).toEqual({ ok: false, error: "invalid_rpm_limit" });
+			expect(
+				resolveUserTokenUpdate({ rpm_limit: 2.5 }, userExisting),
+			).toEqual({ ok: false, error: "invalid_rpm_limit" });
+			expect(
+				resolveUserTokenUpdate({ rpm_limit: "30" }, userExisting),
+			).toEqual({ ok: false, error: "invalid_rpm_limit" });
+		});
+	});
+
 	describe("combined updates", () => {
-		it("applies name, status, allowed_models and expires_at in one pass", () => {
+		it("applies name, status, allowed_models, expires_at and rpm_limit in one pass", () => {
 			const values = userValuesOf({
 				name: "renamed",
 				status: "disabled",
 				allowed_models: ["claude-sonnet-4"],
 				expires_at: null,
+				rpm_limit: null,
 			});
 			expect(values).toEqual({
 				name: "renamed",
 				status: "disabled",
 				allowed_models: '["claude-sonnet-4"]',
 				expires_at: null,
+				rpm_limit: null,
 			});
 		});
 
@@ -519,6 +596,7 @@ describe("resolveUserTokenUpdate", () => {
 			expect(userExisting.status).toBe("active");
 			expect(userExisting.allowed_models).toBe('["gpt-4o"]');
 			expect(userExisting.expires_at).toBe("2099-01-01T00:00:00.000Z");
+			expect(userExisting.rpm_limit).toBe(30);
 		});
 	});
 });
@@ -554,6 +632,50 @@ describe("resolveExpiresAtValue (POST 创建语义的单一校验门)", () => {
 		expect(resolveExpiresAtValue(42)).toEqual({
 			ok: false,
 			error: "invalid_expires_at",
+		});
+	});
+});
+
+describe("resolveRpmLimitValue (POST 创建语义的单一校验门)", () => {
+	it("treats undefined / null / empty string as NULL (follow global default)", () => {
+		expect(resolveRpmLimitValue(undefined)).toEqual({ ok: true, value: null });
+		expect(resolveRpmLimitValue(null)).toEqual({ ok: true, value: null });
+		expect(resolveRpmLimitValue("")).toEqual({ ok: true, value: null });
+	});
+
+	it("accepts 0 (explicit exemption) and positive integers", () => {
+		expect(resolveRpmLimitValue(0)).toEqual({ ok: true, value: 0 });
+		expect(resolveRpmLimitValue(1)).toEqual({ ok: true, value: 1 });
+		expect(resolveRpmLimitValue(1_000_000)).toEqual({
+			ok: true,
+			value: 1_000_000,
+		});
+	});
+
+	it("rejects negatives, fractions, numeric strings and non-numbers", () => {
+		expect(resolveRpmLimitValue(-1)).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
+		});
+		expect(resolveRpmLimitValue(1.5)).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
+		});
+		expect(resolveRpmLimitValue("60")).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
+		});
+		expect(resolveRpmLimitValue(true)).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
+		});
+		expect(resolveRpmLimitValue(NaN)).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
+		});
+		expect(resolveRpmLimitValue(Infinity)).toEqual({
+			ok: false,
+			error: "invalid_rpm_limit",
 		});
 	});
 });

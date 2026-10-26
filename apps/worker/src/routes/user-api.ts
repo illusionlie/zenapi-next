@@ -12,6 +12,7 @@ import {
 } from "../services/settings";
 import {
 	resolveExpiresAtValue,
+	resolveRpmLimitValue,
 	resolveUserTokenUpdate,
 } from "../services/token-update";
 import {
@@ -225,7 +226,7 @@ userApi.get("/monitoring", async (c) => {
 userApi.get("/tokens", async (c) => {
 	const userId = c.get("userId") as string;
 	const result = await c.env.DB.prepare(
-		"SELECT id, name, key_prefix, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, created_at, updated_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
+		"SELECT id, name, key_prefix, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, rpm_limit, created_at, updated_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
 	)
 		.bind(userId)
 		.all();
@@ -239,6 +240,7 @@ userApi.get("/tokens", async (c) => {
 		allowed_channels: string | null;
 		allowed_models: string | null;
 		expires_at: string | null;
+		rpm_limit: number | null;
 		created_at: string;
 		updated_at: string;
 	}>;
@@ -284,8 +286,15 @@ userApi.post("/tokens", async (c) => {
 		return jsonError(c, 400, expiresAt.error, expiresAt.error);
 	}
 
+	// Optional RPM limit — same gate as the admin route (missing/null/"" →
+	// follow the global default; 0 = explicitly unlimited; positive = cap)
+	const rpmLimit = resolveRpmLimitValue(body.rpm_limit);
+	if (!rpmLimit.ok) {
+		return jsonError(c, 400, rpmLimit.error, rpmLimit.error);
+	}
+
 	await c.env.DB.prepare(
-		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, rpm_limit, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	)
 		.bind(
 			id,
@@ -299,6 +308,7 @@ userApi.post("/tokens", async (c) => {
 			null,
 			allowedModels.value,
 			expiresAt.value,
+			rpmLimit.value,
 			userId,
 			now,
 			now,
@@ -330,7 +340,7 @@ userApi.patch("/tokens/:id", async (c) => {
 	}
 
 	const existing = await c.env.DB.prepare(
-		"SELECT id, name, status, allowed_models, expires_at FROM tokens WHERE id = ? AND user_id = ?",
+		"SELECT id, name, status, allowed_models, expires_at, rpm_limit FROM tokens WHERE id = ? AND user_id = ?",
 	)
 		.bind(tokenId, userId)
 		.first<{
@@ -339,6 +349,7 @@ userApi.patch("/tokens/:id", async (c) => {
 			status: string;
 			allowed_models: string | null;
 			expires_at: string | null;
+			rpm_limit: number | null;
 		}>();
 
 	if (!existing) {
@@ -354,13 +365,14 @@ userApi.patch("/tokens/:id", async (c) => {
 	const values = resolved.values;
 
 	await c.env.DB.prepare(
-		"UPDATE tokens SET name = ?, status = ?, allowed_models = ?, expires_at = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+		"UPDATE tokens SET name = ?, status = ?, allowed_models = ?, expires_at = ?, rpm_limit = ?, updated_at = ? WHERE id = ? AND user_id = ?",
 	)
 		.bind(
 			values.name,
 			values.status,
 			values.allowed_models,
 			values.expires_at,
+			values.rpm_limit,
 			nowIso(),
 			tokenId,
 			userId,

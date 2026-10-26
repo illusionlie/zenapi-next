@@ -237,7 +237,12 @@ export const UserApp = ({
 	}, [apiFetch, onUserRefresh]);
 
 	const handleTokenCreate = useCallback(
-		async (name: string, allowedModels: string[], expiresAt: string) => {
+		async (
+			name: string,
+			allowedModels: string[],
+			expiresAt: string,
+			rpmLimit: string,
+		) => {
 			try {
 				const result = await apiFetch<{ token: string }>("/api/u/tokens", {
 					method: "POST",
@@ -245,6 +250,8 @@ export const UserApp = ({
 						name,
 						// 有效期:空串 = 永久(null);ISO 串由后端校验须晚于当前时刻
 						expires_at: expiresAt.trim() === "" ? null : expiresAt,
+						// RPM 上限三态:空串 = 跟随全局默认(null);0 = 显式不限;正整数 = 上限
+						rpm_limit: rpmLimit.trim() === "" ? null : Number(rpmLimit),
 						// 仅在选择模型时携带;缺省由服务端落 NULL(不限制)
 						...(allowedModels.length > 0
 							? { allowed_models: allowedModels }
@@ -273,6 +280,7 @@ export const UserApp = ({
 			name: string;
 			allowedModels: string[];
 			expiresAt: string;
+			rpmLimit: string;
 		}) => {
 			if (!editingToken) return;
 			try {
@@ -284,6 +292,9 @@ export const UserApp = ({
 						allowed_models: data.allowedModels,
 						// 恒传有效期:空串转 null = 永久(已过期令牌改到未来即刻恢复)
 						expires_at: data.expiresAt.trim() === "" ? null : data.expiresAt,
+						// RPM 上限三态:空串 = 跟随全局默认(null);0 = 显式不限;正整数 = 上限
+						rpm_limit:
+							data.rpmLimit.trim() === "" ? null : Number(data.rpmLimit),
 					}),
 				});
 				toast.success("令牌已更新");

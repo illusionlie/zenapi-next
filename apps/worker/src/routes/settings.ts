@@ -21,10 +21,13 @@ import {
 	loadDebugLogFlagDirect,
 	loadDeveloperNormalizeFlagDirect,
 	loadProxyRetryConfig,
+	loadRateLimitConfigDirect,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
+	MAX_RATE_LIMIT_VALUE,
 	MIN_PROXY_RETRY_DELAY_MS,
 	MIN_PROXY_RETRY_ROUNDS,
+	MIN_RATE_LIMIT_VALUE,
 	type RegistrationMode,
 	setAdminPasswordHash,
 	setAnnouncement,
@@ -32,6 +35,7 @@ import {
 	setDebugRequestBodyLog,
 	setDefaultBalance,
 	setDeveloperNormalizeFlag,
+	setIpAuthFailLimit,
 	setLdcEpayGateway,
 	setLdcEpayKey,
 	setLdcEpayPid,
@@ -46,6 +50,7 @@ import {
 	setRequireInviteCode,
 	setRetentionDays,
 	setSessionTtlHours,
+	setTokenRpmDefault,
 	setTurnstileEnabled,
 	setTurnstileSecretKey,
 	setTurnstileSiteKey,
@@ -87,6 +92,8 @@ settings.get("/", async (c) => {
 	const normalizeDeveloperRole = await loadDeveloperNormalizeFlagDirect(
 		c.env.DB,
 	);
+	// 客户端限流两键同契约：直读 clamp 后有效值（表单即真相；缺失键 = 0 = 关闭）
+	const rateLimitConfig = await loadRateLimitConfigDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -105,6 +112,9 @@ settings.get("/", async (c) => {
 		proxy_remove_headers: proxyRemoveHeaders,
 		proxy_retry_rounds: proxyRetryConfig.rounds,
 		proxy_retry_delay_ms: proxyRetryConfig.delayMs,
+		// 客户端限流两键（表单即真相：clamp 后有效值，缺失 = 0 = 关闭）
+		token_rpm_default: rateLimitConfig.tokenRpmDefault,
+		ip_auth_fail_limit: rateLimitConfig.ipAuthFailLimit,
 		model_test_prompt: modelTestPrompt,
 		debug_request_body_log: debugRequestBodyLog,
 		normalize_developer_role: normalizeDeveloperRole,
@@ -311,6 +321,45 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setProxyRetryDelayMs(c.env.DB, delayMs);
+		touched = true;
+	}
+
+	// 客户端限流两键：数值契约同 proxy_retry_*（写侧严格整数 + 范围校验
+	// [MIN_RATE_LIMIT_VALUE, MAX_RATE_LIMIT_VALUE]，读侧 clamp / 脏值降 0 在
+	// resolveRateLimitConfig——两级形态，无 env 层）；0 = 关闭对应限流器
+	if (body.token_rpm_default !== undefined) {
+		const tokenRpmDefault = Number(body.token_rpm_default);
+		if (
+			!Number.isInteger(tokenRpmDefault) ||
+			tokenRpmDefault < MIN_RATE_LIMIT_VALUE ||
+			tokenRpmDefault > MAX_RATE_LIMIT_VALUE
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_token_rpm_default",
+				"invalid_token_rpm_default",
+			);
+		}
+		await setTokenRpmDefault(c.env.DB, tokenRpmDefault);
+		touched = true;
+	}
+
+	if (body.ip_auth_fail_limit !== undefined) {
+		const ipAuthFailLimit = Number(body.ip_auth_fail_limit);
+		if (
+			!Number.isInteger(ipAuthFailLimit) ||
+			ipAuthFailLimit < MIN_RATE_LIMIT_VALUE ||
+			ipAuthFailLimit > MAX_RATE_LIMIT_VALUE
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_ip_auth_fail_limit",
+				"invalid_ip_auth_fail_limit",
+			);
+		}
+		await setIpAuthFailLimit(c.env.DB, ipAuthFailLimit);
 		touched = true;
 	}
 

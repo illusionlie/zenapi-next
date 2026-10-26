@@ -446,6 +446,26 @@ export const TokensView = ({
 							placeholder="留空表示无限"
 						/>
 					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="token-rpm-limit"
+						>
+							RPM 上限（可选）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="token-rpm-limit"
+							name="rpm_limit"
+							type="number"
+							min="0"
+							placeholder="留空 = 跟随全局默认，0 = 不限"
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							每分钟请求上限：留空 = 跟随全局默认，0 = 显式不限，正整数 =
+							每分钟上限。
+						</p>
+					</div>
 					<TokenExpiryPicker
 						idPrefix="token-create"
 						value={tokenCreateExpiresAt}
@@ -570,6 +590,32 @@ export const TokensView = ({
 										}
 									/>
 								</div>
+							</div>
+							<div>
+								<label
+									class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+									for="token-edit-rpm-limit"
+								>
+									RPM 上限（可选）
+								</label>
+								<input
+									class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+									id="token-edit-rpm-limit"
+									type="number"
+									min="0"
+									placeholder="留空 = 跟随全局默认，0 = 不限"
+									value={tokenForm.rpm_limit}
+									onInput={(e) =>
+										onTokenFormChange({
+											rpm_limit:
+												(e.currentTarget as HTMLInputElement)?.value ?? "",
+										})
+									}
+								/>
+								<p class="mt-1 text-xs text-stone-500">
+									每分钟请求上限：留空 = 跟随全局默认，0 = 显式不限，正整数 =
+									每分钟上限。
+								</p>
 							</div>
 							<TokenExpiryPicker
 								idPrefix="token-edit"

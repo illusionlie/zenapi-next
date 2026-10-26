@@ -553,6 +553,62 @@ export const SettingsView = ({
 							毫秒。键缺失时回退环境变量与内置默认值。
 						</p>
 					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="token-rpm-default"
+						>
+							令牌默认 RPM 上限
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="token-rpm-default"
+							name="token_rpm_default"
+							type="number"
+							min="0"
+							max="1000000"
+							placeholder="0"
+							value={settingsForm.token_rpm_default}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									token_rpm_default: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							未单独设置 RPM 的令牌遵循此每分钟请求上限，0 = 关闭。近似限流：按
+							Worker 实例独立计数。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="ip-auth-fail-limit"
+						>
+							IP 鉴权失败阈值
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="ip-auth-fail-limit"
+							name="ip_auth_fail_limit"
+							type="number"
+							min="0"
+							max="1000000"
+							placeholder="0"
+							value={settingsForm.ip_auth_fail_limit}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									ip_auth_fail_limit: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							同一 IP 60 秒窗口内鉴权失败达到阈值后临时拒绝后续请求（429），0 =
+							关闭。
+						</p>
+					</div>
 					<div class="lg:col-span-2">
 						<label
 							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"

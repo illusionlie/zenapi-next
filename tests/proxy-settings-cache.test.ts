@@ -4,12 +4,16 @@ import {
 	DEFAULT_PROXY_RETRY_DELAY_MS,
 	DEFAULT_PROXY_RETRY_ROUNDS,
 	DEVELOPER_NORMALIZE_ROLE_KEY,
+	IP_AUTH_FAIL_LIMIT_KEY,
 	MAX_PROXY_RETRY_ROUNDS,
+	MAX_RATE_LIMIT_VALUE,
 	PROXY_RETRY_DELAY_MS_KEY,
 	PROXY_RETRY_ROUNDS_KEY,
+	TOKEN_RPM_DEFAULT_KEY,
 	loadProxyRetryConfig,
 	loadProxySettingsCached,
 	resolveProxyRetryConfig,
+	resolveRateLimitConfig,
 } from "../apps/worker/src/services/settings";
 import {
 	PROXY_EXTRA_HEADERS_KEY,
@@ -91,7 +95,7 @@ describe("loadProxySettingsCached", () => {
 		expect(b.prepareCount()).toBe(1);
 	});
 
-	it("reads all five proxy keys in a single query", async () => {
+	it("reads all seven proxy keys in a single query", async () => {
 		let boundKeys: string[] = [];
 		const db = {
 			prepare: (sql: string) => {
@@ -114,6 +118,8 @@ describe("loadProxySettingsCached", () => {
 			PROXY_RETRY_ROUNDS_KEY,
 			PROXY_RETRY_DELAY_MS_KEY,
 			DEVELOPER_NORMALIZE_ROLE_KEY,
+			TOKEN_RPM_DEFAULT_KEY,
+			IP_AUTH_FAIL_LIMIT_KEY,
 		]);
 	});
 });
@@ -160,6 +166,57 @@ describe("fallback chain stays uncached + pure resolver semantics", () => {
 		expect(
 			resolveProxyRetryConfig({ [PROXY_RETRY_ROUNDS_KEY]: "2.5" }, { rounds: "4" }),
 		).toEqual({ rounds: 4, delayMs: DEFAULT_PROXY_RETRY_DELAY_MS });
+	});
+});
+
+describe("resolveRateLimitConfig (客户端限流两键,两级链无 env 回退)", () => {
+	it("missing / blank keys degrade to { 0, 0 } — both limiters off (default state)", () => {
+		expect(resolveRateLimitConfig({})).toEqual({
+			tokenRpmDefault: 0,
+			ipAuthFailLimit: 0,
+		});
+		expect(
+			resolveRateLimitConfig({
+				[TOKEN_RPM_DEFAULT_KEY]: "",
+				[IP_AUTH_FAIL_LIMIT_KEY]: null,
+			}),
+		).toEqual({ tokenRpmDefault: 0, ipAuthFailLimit: 0 });
+	});
+
+	it("parses stored integers", () => {
+		expect(
+			resolveRateLimitConfig({
+				[TOKEN_RPM_DEFAULT_KEY]: "60",
+				[IP_AUTH_FAIL_LIMIT_KEY]: "30",
+			}),
+		).toEqual({ tokenRpmDefault: 60, ipAuthFailLimit: 30 });
+		// 0 = 显式关闭(合法存储值,非脏值)
+		expect(
+			resolveRateLimitConfig({
+				[TOKEN_RPM_DEFAULT_KEY]: "0",
+				[IP_AUTH_FAIL_LIMIT_KEY]: "0",
+			}),
+		).toEqual({ tokenRpmDefault: 0, ipAuthFailLimit: 0 });
+	});
+
+	it("clamps out-of-range integers into [0, MAX] (读侧宽容)", () => {
+		expect(
+			resolveRateLimitConfig({
+				[TOKEN_RPM_DEFAULT_KEY]: String(MAX_RATE_LIMIT_VALUE + 10),
+				[IP_AUTH_FAIL_LIMIT_KEY]: "99999999",
+			}),
+		).toEqual({
+			tokenRpmDefault: MAX_RATE_LIMIT_VALUE,
+			ipAuthFailLimit: MAX_RATE_LIMIT_VALUE,
+		});
+	});
+
+	it("dirty values (non-integer / negative / NaN-ish) degrade to 0 (fail-open)", () => {
+		for (const dirty of ["2.5", "abc", "-5", "1e400"]) {
+			expect(
+				resolveRateLimitConfig({ [TOKEN_RPM_DEFAULT_KEY]: dirty }),
+			).toEqual({ tokenRpmDefault: 0, ipAuthFailLimit: 0 });
+		}
 	});
 });
 

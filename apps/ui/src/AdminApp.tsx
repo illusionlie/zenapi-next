@@ -251,6 +251,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			proxy_remove_headers: settings.proxy_remove_headers ?? "",
 			proxy_retry_rounds: String(settings.proxy_retry_rounds ?? 2),
 			proxy_retry_delay_ms: String(settings.proxy_retry_delay_ms ?? 200),
+			// 客户端限流两键(GET 返回 clamp 后有效值,缺失回退 0 = 关闭)
+			token_rpm_default: String(settings.token_rpm_default ?? 0),
+			ip_auth_fail_limit: String(settings.ip_auth_fail_limit ?? 0),
 			normalize_developer_role: settings.normalize_developer_role
 				? "true"
 				: "false",
@@ -418,6 +421,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			allowed_models: [...(target.allowed_models ?? [])],
 			// 已过期/未来时刻都回填为解析后的 ISO(选择器进「自定义」档);NULL → 空 = 永久
 			expires_at: target.expires_at ?? "",
+			// RPM 上限回填现值;NULL → 空 = 跟随全局默认
+			rpm_limit: target.rpm_limit == null ? "" : String(target.rpm_limit),
 		});
 	}, []);
 
@@ -633,6 +638,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 						// 有效期:空串 = 永久(null);ISO 串由后端校验须晚于当前时刻
 						expires_at:
 							tokenCreateExpiresAt.trim() === "" ? null : tokenCreateExpiresAt,
+						// RPM 上限三态:空串 = 跟随全局默认(null);0 = 显式不限;正整数 = 上限
+						rpm_limit:
+							payload.rpm_limit === "" || payload.rpm_limit === undefined
+								? null
+								: Number(payload.rpm_limit),
 						// 仅在选择模型时携带;缺省由服务端落 NULL(不限制)
 						...(tokenCreateModels.size > 0
 							? { allowed_models: [...tokenCreateModels] }
@@ -673,6 +683,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 						allowed_models: tokenForm.allowed_models,
 						expires_at:
 							tokenForm.expires_at.trim() === "" ? null : tokenForm.expires_at,
+						// RPM 上限三态:空串 = 跟随全局默认(null);0 = 显式不限;正整数 = 上限
+						rpm_limit:
+							tokenForm.rpm_limit.trim() === ""
+								? null
+								: Number(tokenForm.rpm_limit),
 					}),
 				});
 				toast.success("令牌已更新");
@@ -707,6 +722,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				proxy_remove_headers: settingsForm.proxy_remove_headers,
 				proxy_retry_rounds: Number(settingsForm.proxy_retry_rounds),
 				proxy_retry_delay_ms: Number(settingsForm.proxy_retry_delay_ms),
+				token_rpm_default: Number(settingsForm.token_rpm_default),
+				ip_auth_fail_limit: Number(settingsForm.ip_auth_fail_limit),
 				normalize_developer_role:
 					settingsForm.normalize_developer_role === "true",
 				model_test_prompt: settingsForm.model_test_prompt,

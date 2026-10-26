@@ -563,13 +563,97 @@ export async function setDeveloperNormalizeFlag(
 	);
 }
 
-// Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
-// normalize flag, cached read)
+// Client-side rate limiting (token RPM default + IP auth-failure throttle,
+// consumed by the tokenAuth hot path; see services/rate-limiter.ts)
+
+export const TOKEN_RPM_DEFAULT_KEY = "token_rpm_default";
+export const IP_AUTH_FAIL_LIMIT_KEY = "ip_auth_fail_limit";
+export const MIN_RATE_LIMIT_VALUE = 0;
+export const MAX_RATE_LIMIT_VALUE = 1_000_000;
+
+export type RateLimitConfig = {
+	/** 令牌级 RPM 全局默认（0 = 关闭；NULL rpm_limit 的令牌跟随此值） */
+	tokenRpmDefault: number;
+	/** 60s 窗口内同 IP 鉴权失败节流阈值（0 = 关闭） */
+	ipAuthFailLimit: number;
+};
 
 /**
- * The five settings keys the proxy hot path consumes, read in one query:
+ * Read-side parser for the two rate-limit keys: Number parse, integers only,
+ * clamped into [0, MAX]; missing / blank / non-integer / negative values
+ * degrade to 0 (= limiter off, fail-open) — the two-level born-in-settings
+ * shape of normalize_developer_role (no env tier: nothing was migrated).
+ * Kept DB-free so tokenAuth re-evaluates it on every request against the
+ * loadProxySettingsCached snapshot.
+ */
+function parseRateLimitInt(raw: string | null | undefined): number {
+	if (raw === null || raw === undefined || raw === "") {
+		return 0;
+	}
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed < 0) {
+		return 0;
+	}
+	return Math.min(MAX_RATE_LIMIT_VALUE, parsed);
+}
+
+/**
+ * Pure resolver for the client-side rate-limit config. The all-default state
+ * (both keys missing) yields { 0, 0 } — both limiters off, the exact
+ * pre-feature behavior (prd.md acceptance anchor).
+ */
+export function resolveRateLimitConfig(raw: SettingsRawMap): RateLimitConfig {
+	return {
+		tokenRpmDefault: parseRateLimitInt(raw[TOKEN_RPM_DEFAULT_KEY] ?? null),
+		ipAuthFailLimit: parseRateLimitInt(raw[IP_AUTH_FAIL_LIMIT_KEY] ?? null),
+	};
+}
+
+/**
+ * Uncached read for the admin settings form ("admin form truth", same
+ * contract as loadDeveloperNormalizeFlagDirect): a PUT followed by a GET on
+ * the same isolate must observe the new value immediately. The /v1 hot path
+ * reads the same keys through loadProxySettingsCached (30s staleness bound).
+ */
+export async function loadRateLimitConfigDirect(
+	db: D1Database,
+): Promise<RateLimitConfig> {
+	const raw = await readSettingsRawMap(db, [
+		TOKEN_RPM_DEFAULT_KEY,
+		IP_AUTH_FAIL_LIMIT_KEY,
+	]);
+	return resolveRateLimitConfig(raw);
+}
+
+/**
+ * Updates the token RPM default setting (write-side strict integer; PUT
+ * route validation rejects non-integers / out-of-range before this).
+ */
+export async function setTokenRpmDefault(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, TOKEN_RPM_DEFAULT_KEY, value.toString());
+}
+
+/**
+ * Updates the IP auth-failure throttle limit setting (same write contract).
+ */
+export async function setIpAuthFailLimit(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, IP_AUTH_FAIL_LIMIT_KEY, value.toString());
+}
+
+// Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
+// normalize flag + client rate limits ×2, cached read)
+
+/**
+ * The seven settings keys the proxy hot path consumes, read in one query:
  * global header policy (extra/remove) + retry config (rounds/delay) + the
- * developer-role normalization flag.
+ * developer-role normalization flag + the client rate-limit pair
+ * (token RPM default, IP auth-failure limit).
  */
 export const PROXY_SETTING_KEYS = [
 	PROXY_EXTRA_HEADERS_KEY,
@@ -577,6 +661,8 @@ export const PROXY_SETTING_KEYS = [
 	PROXY_RETRY_ROUNDS_KEY,
 	PROXY_RETRY_DELAY_MS_KEY,
 	DEVELOPER_NORMALIZE_ROLE_KEY,
+	TOKEN_RPM_DEFAULT_KEY,
+	IP_AUTH_FAIL_LIMIT_KEY,
 ] as const;
 
 const PROXY_SETTINGS_CACHE_KEY = "proxy";
@@ -589,13 +675,14 @@ const PROXY_SETTINGS_CACHE_KEY = "proxy";
 const proxySettingsCaches = new WeakMap<D1Database, TtlCache<SettingsRawMap>>();
 
 /**
- * Loads the five proxy runtime settings keys with a single SQL query,
+ * Loads the seven proxy runtime settings keys with a single SQL query,
  * memoized PROXY_SETTINGS_CACHE_TTL_MS per db binding. Only the raw
  * settings-table read is cached — callers re-run the pure fallback-chain /
- * clamp / fail-open parsers (resolveProxyRetryConfig, parseHeaderPolicyFromRaw)
- * on every call, so the tiered fallback semantics are untouched (the existing
- * settings tests keep passing unchanged). Management edits become visible
- * within the TTL window (documented staleness bound, AGENTS §8).
+ * clamp / fail-open parsers (resolveProxyRetryConfig,
+ * parseHeaderPolicyFromRaw, resolveRateLimitConfig) on every call, so the
+ * tiered fallback semantics are untouched (the existing settings tests keep
+ * passing unchanged). Management edits become visible within the TTL window
+ * (documented staleness bound, AGENTS §8).
  */
 export async function loadProxySettingsCached(
 	db: D1Database,

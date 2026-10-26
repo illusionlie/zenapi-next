@@ -13,6 +13,11 @@ export type ExistingToken = {
 	allowed_models: string | null;
 	/** Optional expiry (ISO-8601 UTC; null = permanent). */
 	expires_at: string | null;
+	/**
+	 * Per-token RPM cap: null = follow the global default, 0 = explicitly
+	 * unlimited, positive = requests per minute.
+	 */
+	rpm_limit: number | null;
 };
 
 /** Final column values to write back after a successful update. */
@@ -25,7 +30,8 @@ export type TokenUpdateError =
 	| "invalid_quota"
 	| "invalid_status"
 	| "invalid_allowed_models"
-	| "invalid_expires_at";
+	| "invalid_expires_at"
+	| "invalid_rpm_limit";
 
 export type TokenUpdateResult =
 	| { ok: true; values: TokenUpdateValues }
@@ -57,6 +63,33 @@ export function resolveExpiresAtValue(
 		return { ok: false, error: "invalid_expires_at" };
 	}
 	return { ok: true, value: new Date(ms).toISOString() };
+}
+
+/**
+ * Validates and normalizes a token RPM limit for write paths (POST creates
+ * and the PATCH resolvers share this single gate; pure function, mirrors
+ * resolveExpiresAtValue).
+ *
+ * - `undefined` / `null` / `""` → `{ ok: true, value: null }` (follow the
+ *   global default). POST treats those identically; PATCH distinguishes
+ *   `undefined` (keep) upstream, before calling.
+ * - 0 (explicitly unlimited — exempts the global default) or a positive
+ *   integer → stored as-is.
+ * - anything else (negative, fractional, non-number, NaN, Infinity) →
+ *   `invalid_rpm_limit` — never a silent fallback.
+ */
+export function resolveRpmLimitValue(
+	raw: unknown,
+):
+	| { ok: true; value: number | null }
+	| { ok: false; error: "invalid_rpm_limit" } {
+	if (raw === null || raw === undefined || raw === "") {
+		return { ok: true, value: null };
+	}
+	if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+		return { ok: false, error: "invalid_rpm_limit" };
+	}
+	return { ok: true, value: raw };
 }
 
 /**
@@ -164,6 +197,18 @@ export function resolveTokenUpdate(
 		expiresAt = resolvedExpiry.value;
 	}
 
+	let rpmLimit = existing.rpm_limit;
+	const rawRpmLimit = input.rpm_limit;
+	if (rawRpmLimit !== undefined) {
+		// Three-state: undefined keeps; null / "" clears back to follow-the-
+		// global-default; 0 = explicit exemption; positive integer = per-minute cap
+		const resolvedRpm = resolveRpmLimitValue(rawRpmLimit);
+		if (!resolvedRpm.ok) {
+			return { ok: false, error: resolvedRpm.error };
+		}
+		rpmLimit = resolvedRpm.value;
+	}
+
 	return {
 		ok: true,
 		values: {
@@ -174,6 +219,7 @@ export function resolveTokenUpdate(
 			allowed_channels: allowedChannels,
 			allowed_models: allowedModels,
 			expires_at: expiresAt,
+			rpm_limit: rpmLimit,
 		},
 	};
 }
@@ -187,6 +233,8 @@ export type UserExistingToken = {
 	status: string;
 	allowed_models: string | null;
 	expires_at: string | null;
+	/** Per-token RPM cap (same three-state semantics as the admin resolver). */
+	rpm_limit: number | null;
 };
 
 /** Final column values to write back after a successful user-side update. */
@@ -198,7 +246,8 @@ export type UserTokenUpdateError =
 	| "invalid_name"
 	| "invalid_status"
 	| "invalid_allowed_models"
-	| "invalid_expires_at";
+	| "invalid_expires_at"
+	| "invalid_rpm_limit";
 
 export type UserTokenUpdateResult =
 	| { ok: true; values: UserTokenUpdateValues }
@@ -271,6 +320,19 @@ export function resolveUserTokenUpdate(
 		expiresAt = resolvedExpiry.value;
 	}
 
+	let rpmLimit = existing.rpm_limit;
+	const rawRpmLimit = input.rpm_limit;
+	if (rawRpmLimit !== undefined) {
+		// Three-state semantics identical to the admin resolver (undefined
+		// keeps; null / "" clears back to follow-the-global-default; 0 /
+		// positive integer sets)
+		const resolvedRpm = resolveRpmLimitValue(rawRpmLimit);
+		if (!resolvedRpm.ok) {
+			return { ok: false, error: resolvedRpm.error };
+		}
+		rpmLimit = resolvedRpm.value;
+	}
+
 	return {
 		ok: true,
 		values: {
@@ -278,6 +340,7 @@ export function resolveUserTokenUpdate(
 			status,
 			allowed_models: allowedModels,
 			expires_at: expiresAt,
+			rpm_limit: rpmLimit,
 		},
 	};
 }

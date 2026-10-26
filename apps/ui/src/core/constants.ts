@@ -92,6 +92,7 @@ export const initialTokenForm: TokenForm = {
 	quota_used: "",
 	allowed_models: [],
 	expires_at: "",
+	rpm_limit: "",
 };
 
 export const initialSettingsForm: SettingsForm = {
@@ -112,6 +113,8 @@ export const initialSettingsForm: SettingsForm = {
 	proxy_remove_headers: "",
 	proxy_retry_rounds: "2",
 	proxy_retry_delay_ms: "200",
+	token_rpm_default: "0",
+	ip_auth_fail_limit: "0",
 	normalize_developer_role: "false",
 	model_test_prompt: "",
 	turnstile_enabled: "false",

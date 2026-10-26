@@ -46,6 +46,8 @@ export type Token = {
 	allowed_models?: string[] | null;
 	/** 可选过期时间(ISO-8601;null = 永久)。状态由渲染层惰性计算,不落库 */
 	expires_at?: string | null;
+	/** 令牌级 RPM 上限:NULL = 跟随全局默认 / 0 = 显式不限 / 正整数 = 每分钟上限 */
+	rpm_limit?: number | null;
 	created_at?: string | null;
 	updated_at?: string | null;
 };
@@ -233,6 +235,10 @@ export type Settings = {
 	proxy_remove_headers: string;
 	proxy_retry_rounds: number;
 	proxy_retry_delay_ms: number;
+	/** 令牌级 RPM 全局默认(0 = 关闭;rpm_limit 为 NULL 的令牌跟随此值) */
+	token_rpm_default: number;
+	/** 60s 窗口内同 IP 鉴权失败节流阈值(0 = 关闭) */
+	ip_auth_fail_limit: number;
 	/** developer 角色透传归一化开关（默认关闭） */
 	normalize_developer_role: boolean;
 	model_test_prompt: string;
@@ -316,13 +322,15 @@ export type ChannelForm = {
 };
 
 /** 令牌编辑表单(管理台):额度字段以 string 承接 input,提交时转换;
- *  expires_at 为有效期选择器解析后的 ISO 串(空串 = 永久,提交时转 null) */
+ *  expires_at 为有效期选择器解析后的 ISO 串(空串 = 永久,提交时转 null);
+ *  rpm_limit 以 string 承接(空串 = 跟随全局默认,提交时转 null) */
 export type TokenForm = {
 	name: string;
 	quota_total: string;
 	quota_used: string;
 	allowed_models: string[];
 	expires_at: string;
+	rpm_limit: string;
 };
 
 export type SettingsForm = {
@@ -343,6 +351,10 @@ export type SettingsForm = {
 	proxy_remove_headers: string;
 	proxy_retry_rounds: string;
 	proxy_retry_delay_ms: string;
+	/** 令牌级 RPM 全局默认(0 = 关闭),数值字段以 string 承接 input */
+	token_rpm_default: string;
+	/** IP 鉴权失败节流阈值(0 = 关闭),数值字段以 string 承接 input */
+	ip_auth_fail_limit: string;
 	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
 	normalize_developer_role: string;
 	model_test_prompt: string;

@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS tokens (
   -- 可选过期时间（ISO-8601 UTC；NULL = 永久）。到期由 tokenAuth 惰性判定拒绝，
   -- 不翻 status、不删除行（迁移 0028 加列，无回填）。
   expires_at TEXT,
+  -- 令牌级 RPM 限流上限（迁移 0029 加列，无回填）：NULL = 跟随全局默认
+  -- settings.token_rpm_default；0 = 显式不限；正整数 = 每分钟上限。
+  rpm_limit INTEGER,
   user_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

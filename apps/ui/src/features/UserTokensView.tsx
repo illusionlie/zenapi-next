@@ -12,9 +12,14 @@ type UserTokensViewProps = {
 	tokenPageSize: number;
 	tokenTotal: number;
 	tokenTotalPages: number;
-	// 创建表单状态留在组件内,提交时回调 (name, allowedModels, expiresAt);
-	// expiresAt 为选择器解析后的 ISO(空串 = 永久)
-	onCreate: (name: string, allowedModels: string[], expiresAt: string) => void;
+	// 创建表单状态留在组件内,提交时回调 (name, allowedModels, expiresAt, rpmLimit);
+	// expiresAt 为选择器解析后的 ISO(空串 = 永久);rpmLimit 空串 = 跟随全局默认
+	onCreate: (
+		name: string,
+		allowedModels: string[],
+		expiresAt: string,
+		rpmLimit: string,
+	) => void;
 	onPageChange: (next: number) => void;
 	onPageSizeChange: (next: number) => void;
 	onToggle: (id: string, status: string) => void;
@@ -27,6 +32,7 @@ type UserTokensViewProps = {
 		name: string;
 		allowedModels: string[];
 		expiresAt: string;
+		rpmLimit: string;
 	}) => void;
 	onFetchModelCandidates: () => Promise<string[]>;
 };
@@ -64,6 +70,8 @@ export const UserTokensView = ({
 	);
 	// 创建模态的有效期(选择器解析后的 ISO;空串 = 永久),随 resetModal 重置
 	const [createExpiresAt, setCreateExpiresAt] = useState("");
+	// 创建模态的 RPM 上限(空串 = 跟随全局默认),随 resetModal 重置
+	const [createRpmLimit, setCreateRpmLimit] = useState("");
 	const pageItems = buildPageItems(tokenPage, tokenTotalPages);
 
 	const resetModal = () => {
@@ -71,19 +79,26 @@ export const UserTokensView = ({
 		setTokenName("");
 		setCreateSelectedModels(new Set());
 		setCreateExpiresAt("");
+		setCreateRpmLimit("");
 	};
 
 	const openCreate = () => {
 		setTokenName("");
 		setCreateSelectedModels(new Set());
 		setCreateExpiresAt("");
+		setCreateRpmLimit("");
 		setShowCreateModal(true);
 	};
 
 	const handleCreate = (e: Event) => {
 		e.preventDefault();
 		if (!tokenName.trim()) return;
-		onCreate(tokenName.trim(), [...createSelectedModels], createExpiresAt);
+		onCreate(
+			tokenName.trim(),
+			[...createSelectedModels],
+			createExpiresAt,
+			createRpmLimit,
+		);
 		resetModal();
 	};
 
@@ -397,6 +412,31 @@ export const UserTokensView = ({
 						value={createExpiresAt}
 						onChange={setCreateExpiresAt}
 					/>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="user-token-rpm-limit"
+						>
+							RPM 上限（可选）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="user-token-rpm-limit"
+							type="number"
+							min="0"
+							placeholder="留空 = 跟随全局默认，0 = 不限"
+							value={createRpmLimit}
+							onInput={(e) =>
+								setCreateRpmLimit(
+									(e.currentTarget as HTMLInputElement)?.value ?? "",
+								)
+							}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							每分钟请求上限：留空 = 跟随全局默认，0 = 显式不限，正整数 =
+							每分钟上限。
+						</p>
+					</div>
 					<ModelAllowlistPicker
 						label="模型白名单"
 						emptyHint="未选择 = 不限制，可调用全部可用模型"
@@ -453,10 +493,11 @@ type EditTokenFormProps = {
 		name: string;
 		allowedModels: string[];
 		expiresAt: string;
+		rpmLimit: string;
 	}) => void;
 };
 
-/** 编辑令牌表单:名称 + 模型白名单 + 有效期,无任何额度字段(额度仅管理员可改) */
+/** 编辑令牌表单:名称 + 模型白名单 + 有效期 + RPM 上限,无任何额度字段(额度仅管理员可改) */
 const EditTokenForm = ({
 	token,
 	fetchCandidates,
@@ -469,6 +510,10 @@ const EditTokenForm = ({
 	);
 	// 有效期(选择器解析后的 ISO;空串 = 永久),回填现值(含已过期时刻 → 可改期续约)
 	const [expiresAt, setExpiresAt] = useState(token.expires_at ?? "");
+	// RPM 上限回填现值;NULL → 空 = 跟随全局默认
+	const [rpmLimit, setRpmLimit] = useState(
+		token.rpm_limit == null ? "" : String(token.rpm_limit),
+	);
 
 	const handleSubmit = (e: Event) => {
 		e.preventDefault();
@@ -476,6 +521,7 @@ const EditTokenForm = ({
 			name: name.trim(),
 			allowedModels: [...selectedModels],
 			expiresAt,
+			rpmLimit,
 		});
 	};
 
@@ -520,6 +566,29 @@ const EditTokenForm = ({
 					value={expiresAt}
 					onChange={setExpiresAt}
 				/>
+				<div>
+					<label
+						class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+						for="user-token-edit-rpm-limit"
+					>
+						RPM 上限（可选）
+					</label>
+					<input
+						class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+						id="user-token-edit-rpm-limit"
+						type="number"
+						min="0"
+						placeholder="留空 = 跟随全局默认，0 = 不限"
+						value={rpmLimit}
+						onInput={(e) =>
+							setRpmLimit((e.currentTarget as HTMLInputElement)?.value ?? "")
+						}
+					/>
+					<p class="mt-1 text-xs text-stone-500">
+						每分钟请求上限：留空 = 跟随全局默认，0 = 显式不限，正整数 =
+						每分钟上限。
+					</p>
+				</div>
 				<ModelAllowlistPicker
 					label="模型白名单"
 					emptyHint="未选择 = 不限制，可调用全部可用模型"
