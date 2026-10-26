@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "hono/jsx/dom";
-import type { InviteCode, RegistrationMode, SettingsForm } from "../core/types";
+import type {
+	InviteCode,
+	RegistrationMode,
+	SettingsForm,
+	Webhook,
+	WebhookType,
+} from "../core/types";
+import { WEBHOOK_TYPE_LABELS } from "../core/types";
 import { ToggleSwitch } from "./ToggleSwitch";
 
 type SettingsViewProps = {
@@ -9,6 +16,15 @@ type SettingsViewProps = {
 	onSubmit: (event: Event) => void;
 	onFormChange: (patch: Partial<SettingsForm>) => void;
 	inviteCodes: InviteCode[];
+	webhooks: Webhook[];
+	onAddWebhook: (payload: {
+		name: string;
+		type: WebhookType;
+		url: string;
+	}) => Promise<void>;
+	onToggleWebhook: (id: string, enabled: boolean) => Promise<void>;
+	onDeleteWebhook: (id: string) => Promise<void>;
+	onTestWebhook: (id: string) => Promise<void>;
 	onGenerateCodes: (
 		count: number,
 		maxUses: number,
@@ -18,6 +34,15 @@ type SettingsViewProps = {
 	onExportCodes: () => Promise<void>;
 	onExportBackup: () => Promise<void>;
 	onImportBackup: (payloadText: string) => Promise<void>;
+};
+
+/** 类型徽标配色（按平台约定色，generic 中性灰） */
+const webhookTypeBadgeClass: Record<WebhookType, string> = {
+	feishu: "bg-blue-50 text-blue-600",
+	wecom: "bg-green-50 text-green-600",
+	dingtalk: "bg-sky-50 text-sky-600",
+	slack: "bg-purple-50 text-purple-600",
+	generic: "bg-stone-100 text-stone-500",
 };
 
 const registrationModeOptions: {
@@ -49,6 +74,11 @@ export const SettingsView = ({
 	onSubmit,
 	onFormChange,
 	inviteCodes,
+	webhooks,
+	onAddWebhook,
+	onToggleWebhook,
+	onDeleteWebhook,
+	onTestWebhook,
 	onGenerateCodes,
 	onDeleteCode,
 	onExportCodes,
@@ -62,6 +92,12 @@ export const SettingsView = ({
 	const modelTestPromptRef = useRef<HTMLTextAreaElement>(null);
 	const [backupText, setBackupText] = useState("");
 	const [backupImporting, setBackupImporting] = useState(false);
+	// Webhook 添加表单（本地态，添加成功后清空；错误由上层 toast 承担）
+	const [whName, setWhName] = useState("");
+	const [whType, setWhType] = useState<WebhookType>("feishu");
+	const [whUrl, setWhUrl] = useState("");
+	const [whAdding, setWhAdding] = useState(false);
+	const [whTesting, setWhTesting] = useState<string | null>(null);
 
 	// enabled toggle 门控：两把密钥（现值 + 未保存的输入）解析后任一为空则不可开启
 	const turnstileSiteKeyReady = settingsForm.turnstile_site_key.trim() !== "";
@@ -179,6 +215,38 @@ export const SettingsView = ({
 			modelTestPromptRef.current.value = settingsForm.model_test_prompt;
 		}
 	}, [settingsForm.model_test_prompt]);
+
+	// Webhook 添加：本地校验非空后交上层（服务端再做 type 白名单 + https 校验），
+	// 成功后由上层重拉列表，这里只清空输入
+	const handleWebhookAddClick = async () => {
+		if (whAdding || !whName.trim() || !whUrl.trim()) {
+			return;
+		}
+		setWhAdding(true);
+		try {
+			await onAddWebhook({
+				name: whName.trim(),
+				type: whType,
+				url: whUrl.trim(),
+			});
+			setWhName("");
+			setWhUrl("");
+		} finally {
+			setWhAdding(false);
+		}
+	};
+
+	const handleWebhookTestClick = async (id: string) => {
+		if (whTesting) {
+			return;
+		}
+		setWhTesting(id);
+		try {
+			await onTestWebhook(id);
+		} finally {
+			setWhTesting(null);
+		}
+	};
 
 	return (
 		<div class="space-y-5">
@@ -1062,6 +1130,278 @@ export const SettingsView = ({
 					)}
 				</div>
 			)}
+			<div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
+				<div class="mb-4 flex items-center justify-between">
+					<h3 class="mb-0 font-['Space_Grotesk'] text-lg tracking-tight text-stone-900">
+						通知与报警
+					</h3>
+				</div>
+				<p class="mb-4 text-xs text-stone-500">
+					每 5 分钟评估各渠道近期窗口失败率：达到阈值且样本量达标时向全部启用的
+					Webhook
+					推送报警（同渠道在静默窗口内不重复）；失败率回落到阈值一半以下后发送恢复通知。
+				</p>
+				<form class="grid gap-3.5 lg:grid-cols-2" onSubmit={onSubmit}>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="alert-failure-rate-pct"
+						>
+							失败率报警阈值（%）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="alert-failure-rate-pct"
+							name="alert_failure_rate_pct"
+							type="number"
+							min="0"
+							max="100"
+							value={settingsForm.alert_failure_rate_pct}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									alert_failure_rate_pct: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							窗口内错误请求占比达到该阈值即触发报警，0 = 关闭报警。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="alert-min-samples"
+						>
+							最小样本量（请求次数）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="alert-min-samples"
+							name="alert_min_samples"
+							type="number"
+							min="0"
+							max="10000"
+							value={settingsForm.alert_min_samples}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									alert_min_samples: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							窗口内请求次数不足时不报警，防止低流量渠道误报。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="alert-window-minutes"
+						>
+							评估窗口（分钟）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="alert-window-minutes"
+							name="alert_window_minutes"
+							type="number"
+							min="5"
+							max="120"
+							value={settingsForm.alert_window_minutes}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									alert_window_minutes: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							失败率统计的回看窗口，范围 5–120 分钟。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="alert-silence-minutes"
+						>
+							报警静默窗口（分钟）
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="alert-silence-minutes"
+							name="alert_silence_minutes"
+							type="number"
+							min="1"
+							max="1440"
+							value={settingsForm.alert_silence_minutes}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									alert_silence_minutes: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							同渠道两次报警之间的最小间隔，范围 1–1440 分钟。
+						</p>
+					</div>
+					<div class="lg:col-span-2">
+						<label
+							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"
+							for="setting-daily-report"
+						>
+							<ToggleSwitch
+								id="setting-daily-report"
+								checked={settingsForm.daily_report_enabled === "true"}
+								onChange={(checked) => {
+									onFormChange({
+										daily_report_enabled: checked ? "true" : "false",
+									});
+								}}
+							/>
+							启用每日用量日报
+						</label>
+						<p class="mt-1 text-xs text-stone-500">
+							每日 03:17 UTC（维护任务之后）聚合昨日请求量 / Tokens / 消费额 /
+							错误率与 Top 渠道、模型，推送到全部启用的 Webhook。
+						</p>
+					</div>
+					<div class="flex items-end lg:col-span-2">
+						<button
+							class="h-11 rounded-lg bg-stone-900 px-4 py-2.5 text-sm font-semibold text-white transition-[transform,box-shadow] duration-200 ease-smooth-out hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60"
+							type="submit"
+						>
+							保存报警设置
+						</button>
+					</div>
+				</form>
+				<div class="mt-5 border-t border-stone-100 pt-4">
+					<h4 class="mb-3 text-sm font-semibold text-stone-700">
+						Webhook 通知通道
+					</h4>
+					{webhooks.length === 0 ? (
+						<p class="py-2 text-center text-sm text-stone-400">
+							暂无 Webhook，添加后开始接收报警与日报
+						</p>
+					) : (
+						<div class="overflow-x-auto">
+							<table class="w-full text-left text-sm">
+								<thead>
+									<tr class="border-b border-stone-100 text-xs uppercase tracking-widest text-stone-400">
+										<th class="pb-2 pr-4 font-medium">名称</th>
+										<th class="pb-2 pr-4 font-medium">类型</th>
+										<th class="pb-2 pr-4 font-medium">地址</th>
+										<th class="pb-2 pr-4 font-medium">启用</th>
+										<th class="pb-2 font-medium">操作</th>
+									</tr>
+								</thead>
+								<tbody>
+									{webhooks.map((hook) => (
+										<tr key={hook.id} class="border-b border-stone-50">
+											<td class="py-2 pr-4 text-stone-700">{hook.name}</td>
+											<td class="py-2 pr-4">
+												<span
+													class={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${webhookTypeBadgeClass[hook.type]}`}
+												>
+													{WEBHOOK_TYPE_LABELS[hook.type]}
+												</span>
+											</td>
+											<td
+												class="max-w-[16rem] truncate py-2 pr-4 font-mono text-xs text-stone-500"
+												title={hook.url}
+											>
+												{hook.url}
+											</td>
+											<td class="py-2 pr-4">
+												<ToggleSwitch
+													id={`webhook-enabled-${hook.id}`}
+													checked={hook.enabled}
+													onChange={(checked) => {
+														void onToggleWebhook(hook.id, checked);
+													}}
+												/>
+											</td>
+											<td class="py-2">
+												<button
+													type="button"
+													class="mr-3 text-xs text-amber-600 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+													disabled={whTesting === hook.id}
+													onClick={() => {
+														void handleWebhookTestClick(hook.id);
+													}}
+												>
+													{whTesting === hook.id ? "发送中…" : "测试"}
+												</button>
+												<button
+													type="button"
+													class="text-xs text-red-500 hover:text-red-700"
+													onClick={() => onDeleteWebhook(hook.id)}
+												>
+													删除
+												</button>
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
+					)}
+					<div class="mt-4 grid gap-3 lg:grid-cols-[10rem_9rem_1fr_auto]">
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							placeholder="名称，如 运维群"
+							type="text"
+							value={whName}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								setWhName(target?.value ?? "");
+							}}
+						/>
+						<select
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							value={whType}
+							onChange={(event) => {
+								const target = event.currentTarget as HTMLSelectElement | null;
+								setWhType((target?.value ?? "feishu") as WebhookType);
+							}}
+						>
+							{(Object.keys(WEBHOOK_TYPE_LABELS) as WebhookType[]).map(
+								(type) => (
+									<option key={type} value={type}>
+										{WEBHOOK_TYPE_LABELS[type]}
+									</option>
+								),
+							)}
+						</select>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							placeholder="https://… 机器人 Webhook 地址"
+							type="text"
+							value={whUrl}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								setWhUrl(target?.value ?? "");
+							}}
+						/>
+						<button
+							type="button"
+							class="h-[38px] rounded-lg bg-stone-900 px-4 text-xs font-semibold text-white transition-shadow hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+							disabled={whAdding || !whName.trim() || !whUrl.trim()}
+							onClick={() => {
+								void handleWebhookAddClick();
+							}}
+						>
+							{whAdding ? "添加中…" : "添加"}
+						</button>
+					</div>
+					<p class="mt-2 text-xs text-stone-500">
+						支持飞书 / 企业微信 / 钉钉 / Slack 群机器人与 Generic 自定义端点
+						（收到统一 JSON 消息结构）；地址须为
+						https。保存前可先添加再用「测试」验证送达。
+					</p>
+				</div>
+			</div>
 		</div>
 	);
 };

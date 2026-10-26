@@ -646,6 +646,176 @@ export async function setIpAuthFailLimit(
 	await upsertSetting(db, IP_AUTH_FAIL_LIMIT_KEY, value.toString());
 }
 
+// Webhook alerting config (channel failure-rate alerts evaluated by the
+// every-5-minutes cron; see services/alerts.ts) + optional daily usage
+// report flag. Born in settings with no env tier; the evaluator is a cron
+// path (not the request hot path), so these keys are deliberately NOT in
+// PROXY_SETTING_KEYS — reads go through the uncached direct loader below
+// (design: 评估器走直读).
+
+export const ALERT_FAILURE_RATE_PCT_KEY = "alert_failure_rate_pct";
+export const ALERT_MIN_SAMPLES_KEY = "alert_min_samples";
+export const ALERT_SILENCE_MINUTES_KEY = "alert_silence_minutes";
+export const ALERT_WINDOW_MINUTES_KEY = "alert_window_minutes";
+export const DAILY_REPORT_ENABLED_KEY = "daily_report_enabled";
+
+/** 0 = alerting off (still clears stale alert states on evaluation). */
+export const MIN_ALERT_FAILURE_RATE_PCT = 0;
+export const MAX_ALERT_FAILURE_RATE_PCT = 100;
+export const DEFAULT_ALERT_FAILURE_RATE_PCT = 50;
+export const MIN_ALERT_MIN_SAMPLES = 0;
+export const MAX_ALERT_MIN_SAMPLES = 10_000;
+export const DEFAULT_ALERT_MIN_SAMPLES = 5;
+export const MIN_ALERT_SILENCE_MINUTES = 1;
+export const MAX_ALERT_SILENCE_MINUTES = 1440;
+export const DEFAULT_ALERT_SILENCE_MINUTES = 30;
+export const MIN_ALERT_WINDOW_MINUTES = 5;
+export const MAX_ALERT_WINDOW_MINUTES = 120;
+export const DEFAULT_ALERT_WINDOW_MINUTES = 15;
+
+export type AlertConfig = {
+	/** 渠道失败率报警阈值百分比；0 = 关闭报警 */
+	failureRatePct: number;
+	/** 触发报警的最小窗口样本数（防误报） */
+	minSamples: number;
+	/** 同渠道同类型报警的静默窗口（分钟） */
+	silenceMinutes: number;
+	/** 失败率评估窗口（分钟） */
+	windowMinutes: number;
+};
+
+/**
+ * Parses one bounded integer settings value (two-level born-in-settings
+ * shape, same read-wide posture as parseBoundedRetryInt): missing / blank /
+ * non-integer input falls back to the key default; an in-range or out-of-range
+ * integer is clamped into [min, max] — dirty stored values never break the
+ * evaluator. 0 is a legal stored value where the range allows it (failure
+ * rate 0 = alerting off, min samples 0 = no sample floor).
+ */
+function parseBoundedAlertInt(
+	raw: string | null | undefined,
+	min: number,
+	max: number,
+	fallback: number,
+): number {
+	if (raw === null || raw === undefined || raw === "") {
+		return fallback;
+	}
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed)) {
+		return fallback;
+	}
+	return Math.min(max, Math.max(min, parsed));
+}
+
+/**
+ * Pure resolver for the four alert-config keys. Kept DB-free for direct
+ * unit testing; each key independently falls back to its default and clamps.
+ */
+export function resolveAlertConfig(raw: SettingsRawMap): AlertConfig {
+	return {
+		failureRatePct: parseBoundedAlertInt(
+			raw[ALERT_FAILURE_RATE_PCT_KEY] ?? null,
+			MIN_ALERT_FAILURE_RATE_PCT,
+			MAX_ALERT_FAILURE_RATE_PCT,
+			DEFAULT_ALERT_FAILURE_RATE_PCT,
+		),
+		minSamples: parseBoundedAlertInt(
+			raw[ALERT_MIN_SAMPLES_KEY] ?? null,
+			MIN_ALERT_MIN_SAMPLES,
+			MAX_ALERT_MIN_SAMPLES,
+			DEFAULT_ALERT_MIN_SAMPLES,
+		),
+		silenceMinutes: parseBoundedAlertInt(
+			raw[ALERT_SILENCE_MINUTES_KEY] ?? null,
+			MIN_ALERT_SILENCE_MINUTES,
+			MAX_ALERT_SILENCE_MINUTES,
+			DEFAULT_ALERT_SILENCE_MINUTES,
+		),
+		windowMinutes: parseBoundedAlertInt(
+			raw[ALERT_WINDOW_MINUTES_KEY] ?? null,
+			MIN_ALERT_WINDOW_MINUTES,
+			MAX_ALERT_WINDOW_MINUTES,
+			DEFAULT_ALERT_WINDOW_MINUTES,
+		),
+	};
+}
+
+/**
+ * Uncached read for the alert evaluator and the admin settings form (the
+ * evaluator runs on the every-5-minutes cron, not per-request — no TTL
+ * cache needed; admin form truth contract identical to
+ * loadRateLimitConfigDirect).
+ */
+export async function loadAlertConfigDirect(
+	db: D1Database,
+): Promise<AlertConfig> {
+	const raw = await readSettingsRawMap(db, [
+		ALERT_FAILURE_RATE_PCT_KEY,
+		ALERT_MIN_SAMPLES_KEY,
+		ALERT_SILENCE_MINUTES_KEY,
+		ALERT_WINDOW_MINUTES_KEY,
+	]);
+	return resolveAlertConfig(raw);
+}
+
+/**
+ * Pure resolver for the daily usage report flag: strict "true"/"false" pair,
+ * missing/dirty values degrade to the default false (same two-level chain as
+ * resolveDeveloperNormalizeFlag — no env tier, nothing was migrated).
+ */
+export function resolveDailyReportFlag(raw: SettingsRawMap): boolean {
+	return (raw[DAILY_REPORT_ENABLED_KEY] ?? null) === "true";
+}
+
+/** Uncached read of the daily report flag (admin form truth + cron chain). */
+export async function loadDailyReportFlagDirect(
+	db: D1Database,
+): Promise<boolean> {
+	const raw = await readSettingsRawMap(db, [DAILY_REPORT_ENABLED_KEY]);
+	return resolveDailyReportFlag(raw);
+}
+
+/** Updates the daily usage report flag (stored strictly as "true"/"false"). */
+export async function setDailyReportFlag(
+	db: D1Database,
+	enabled: boolean,
+): Promise<void> {
+	await upsertSetting(db, DAILY_REPORT_ENABLED_KEY, enabled ? "true" : "false");
+}
+
+/** Updates the alert failure-rate threshold (0–100, 0 = off). */
+export async function setAlertFailureRatePct(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, ALERT_FAILURE_RATE_PCT_KEY, value.toString());
+}
+
+/** Updates the alert minimum-sample floor. */
+export async function setAlertMinSamples(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, ALERT_MIN_SAMPLES_KEY, value.toString());
+}
+
+/** Updates the alert silence window (minutes). */
+export async function setAlertSilenceMinutes(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, ALERT_SILENCE_MINUTES_KEY, value.toString());
+}
+
+/** Updates the alert evaluation window (minutes). */
+export async function setAlertWindowMinutes(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, ALERT_WINDOW_MINUTES_KEY, value.toString());
+}
+
 // Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
 // normalize flag + client rate limits ×2, cached read)
 

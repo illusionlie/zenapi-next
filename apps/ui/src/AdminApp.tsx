@@ -34,6 +34,8 @@ import type {
 	TokenForm,
 	UsageLog,
 	User,
+	Webhook,
+	WebhookType,
 } from "./core/types";
 import {
 	parseChannelApiFormats,
@@ -184,6 +186,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 	const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
 	const [users, setUsers] = useState<User[]>([]);
 	const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
+	const [webhooks, setWebhooks] = useState<Webhook[]>([]);
 	const [secretModal, setSecretModal] = useState<{
 		title: string;
 		value: string;
@@ -255,6 +258,12 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			// 客户端限流两键(GET 返回 clamp 后有效值,缺失回退 0 = 关闭)
 			token_rpm_default: String(settings.token_rpm_default ?? 0),
 			ip_auth_fail_limit: String(settings.ip_auth_fail_limit ?? 0),
+			// 报警四键 + 日报开关(GET 返回 clamp 后有效值)
+			alert_failure_rate_pct: String(settings.alert_failure_rate_pct ?? 50),
+			alert_min_samples: String(settings.alert_min_samples ?? 5),
+			alert_silence_minutes: String(settings.alert_silence_minutes ?? 30),
+			alert_window_minutes: String(settings.alert_window_minutes ?? 15),
+			daily_report_enabled: settings.daily_report_enabled ? "true" : "false",
 			normalize_developer_role: settings.normalize_developer_role
 				? "true"
 				: "false",
@@ -276,6 +285,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 		setUsers(result.users);
 	}, [apiFetch]);
 
+	const loadWebhooks = useCallback(async () => {
+		const result = await apiFetch<{ webhooks: Webhook[] }>("/api/webhooks");
+		setWebhooks(result.webhooks);
+	}, [apiFetch]);
+
 	const loadModelCandidates = useCallback(async (): Promise<string[]> => {
 		const result = await apiFetch<{ models: ModelItem[] }>("/api/models");
 		return result.models.map((m) => m.id);
@@ -294,7 +308,10 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				if (tabId === "models") await loadModels();
 				if (tabId === "tokens") await loadTokens();
 				if (tabId === "usage") await loadUsage();
-				if (tabId === "settings") await loadSettings();
+				if (tabId === "settings") {
+					await loadSettings();
+					await loadWebhooks();
+				}
 				if (tabId === "users") await loadUsers();
 				if (tabId === "playground") {
 					/* no data to preload */
@@ -314,6 +331,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			loadTokens,
 			loadUsage,
 			loadUsers,
+			loadWebhooks,
 		],
 	);
 
@@ -725,6 +743,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				proxy_retry_delay_ms: Number(settingsForm.proxy_retry_delay_ms),
 				token_rpm_default: Number(settingsForm.token_rpm_default),
 				ip_auth_fail_limit: Number(settingsForm.ip_auth_fail_limit),
+				alert_failure_rate_pct: Number(settingsForm.alert_failure_rate_pct),
+				alert_min_samples: Number(settingsForm.alert_min_samples),
+				alert_silence_minutes: Number(settingsForm.alert_silence_minutes),
+				alert_window_minutes: Number(settingsForm.alert_window_minutes),
+				daily_report_enabled: settingsForm.daily_report_enabled === "true",
 				normalize_developer_role:
 					settingsForm.normalize_developer_role === "true",
 				model_test_prompt: settingsForm.model_test_prompt,
@@ -1134,6 +1157,77 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 		}
 	}, [token]);
 
+	// Webhook 通知通道 CRUD（/api/webhooks）：增删改后重拉列表，测试按钮
+	// 真实发送样例消息并按返回的 ok/status 提示；错误统一 toast，promise 不
+	// 向 SettingsView 传播 reject
+	const handleWebhookAdd = useCallback(
+		async (payload: { name: string; type: WebhookType; url: string }) => {
+			try {
+				await apiFetch("/api/webhooks", {
+					method: "POST",
+					body: JSON.stringify(payload),
+				});
+				await loadWebhooks();
+				toast.success("Webhook 已添加");
+			} catch (error) {
+				toast.error((error as Error).message);
+			}
+		},
+		[apiFetch, loadWebhooks],
+	);
+
+	const handleWebhookToggle = useCallback(
+		async (id: string, enabled: boolean) => {
+			try {
+				await apiFetch(`/api/webhooks/${id}`, {
+					method: "PATCH",
+					body: JSON.stringify({ enabled }),
+				});
+				await loadWebhooks();
+			} catch (error) {
+				toast.error((error as Error).message);
+			}
+		},
+		[apiFetch, loadWebhooks],
+	);
+
+	const handleWebhookDelete = useCallback(
+		async (id: string) => {
+			try {
+				await apiFetch(`/api/webhooks/${id}`, { method: "DELETE" });
+				await loadWebhooks();
+				toast.success("Webhook 已删除");
+			} catch (error) {
+				toast.error((error as Error).message);
+			}
+		},
+		[apiFetch, loadWebhooks],
+	);
+
+	const handleWebhookTest = useCallback(
+		async (id: string) => {
+			try {
+				const result = await apiFetch<{
+					ok: boolean;
+					status: number | null;
+				}>("/api/webhooks/test", {
+					method: "POST",
+					body: JSON.stringify({ id }),
+				});
+				if (result.ok) {
+					toast.success("测试消息已送达");
+				} else {
+					toast.error(
+						`测试发送失败${result.status ? `（HTTP ${result.status}）` : ""}`,
+					);
+				}
+			} catch (error) {
+				toast.error((error as Error).message);
+			}
+		},
+		[apiFetch],
+	);
+
 	// 配置备份导出：下载 JSON（含渠道 API Key 明文，警示由 SettingsView 文案承担）
 	const handleBackupExport = useCallback(async () => {
 		try {
@@ -1447,6 +1541,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 					onSubmit={handleSettingsSubmit}
 					onFormChange={handleSettingsFormChange}
 					inviteCodes={inviteCodes}
+					webhooks={webhooks}
+					onAddWebhook={handleWebhookAdd}
+					onToggleWebhook={handleWebhookToggle}
+					onDeleteWebhook={handleWebhookDelete}
+					onTestWebhook={handleWebhookTest}
 					onGenerateCodes={handleGenerateCodes}
 					onDeleteCode={handleDeleteCode}
 					onExportCodes={handleExportCodes}

@@ -267,6 +267,16 @@ export type Settings = {
 	token_rpm_default: number;
 	/** 60s 窗口内同 IP 鉴权失败节流阈值(0 = 关闭) */
 	ip_auth_fail_limit: number;
+	/** 渠道失败率报警阈值百分比(0 = 关闭报警) */
+	alert_failure_rate_pct: number;
+	/** 触发报警的最小窗口样本数(防误报) */
+	alert_min_samples: number;
+	/** 同渠道报警静默窗口(分钟) */
+	alert_silence_minutes: number;
+	/** 失败率评估窗口(分钟) */
+	alert_window_minutes: number;
+	/** 昨日用量日报推送开关(默认关) */
+	daily_report_enabled: boolean;
 	/** developer 角色透传归一化开关（默认关闭） */
 	normalize_developer_role: boolean;
 	model_test_prompt: string;
@@ -383,6 +393,16 @@ export type SettingsForm = {
 	token_rpm_default: string;
 	/** IP 鉴权失败节流阈值(0 = 关闭),数值字段以 string 承接 input */
 	ip_auth_fail_limit: string;
+	/** 渠道失败率报警阈值百分比(0 = 关闭),数值字段以 string 承接 input */
+	alert_failure_rate_pct: string;
+	/** 报警最小样本数,数值字段以 string 承接 input */
+	alert_min_samples: string;
+	/** 报警静默窗口(分钟),数值字段以 string 承接 input */
+	alert_silence_minutes: string;
+	/** 失败率评估窗口(分钟),数值字段以 string 承接 input */
+	alert_window_minutes: string;
+	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
+	daily_report_enabled: string;
 	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
 	normalize_developer_role: string;
 	model_test_prompt: string;
@@ -392,6 +412,27 @@ export type SettingsForm = {
 	turnstile_site_key: string;
 	/** 永不回显：仅承接新输入，留空 = 不提交（保留现值） */
 	turnstile_secret_key: string;
+};
+
+/** Webhook 通知端点类型（与 worker WEBHOOK_TYPES 白名单同构） */
+export type WebhookType = "feishu" | "wecom" | "dingtalk" | "slack" | "generic";
+
+export const WEBHOOK_TYPE_LABELS: Record<WebhookType, string> = {
+	feishu: "飞书",
+	wecom: "企业微信",
+	dingtalk: "钉钉",
+	slack: "Slack",
+	generic: "Generic",
+};
+
+export type Webhook = {
+	id: string;
+	name: string;
+	type: WebhookType;
+	url: string;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
 };
 
 export type ModelTestStatus = "pending" | "running" | "success" | "failed";

@@ -217,3 +217,17 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
 CREATE INDEX IF NOT EXISTS recharge_orders_user ON recharge_orders(user_id);
 CREATE INDEX IF NOT EXISTS recharge_orders_trade ON recharge_orders(out_trade_no);
 
+-- webhooks: 出站通知端点（渠道失败率报警 */5 cron 评估 + 可选用量日报；
+-- type 白名单 feishu|wecom|dingtalk|slack|generic，payload 形状见
+-- services/webhook-senders.ts）。url 内嵌机器人 token，仅管理员域可见
+-- （routes/webhooks.ts，走 adminAuth）。
+CREATE TABLE IF NOT EXISTS webhooks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+

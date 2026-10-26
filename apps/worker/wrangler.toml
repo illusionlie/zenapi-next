@@ -8,7 +8,9 @@ PROXY_RETRY_ROUNDS = "2"
 PROXY_RETRY_DELAY_MS = "200"
 
 [triggers]
-crons = ["17 3 * * *"] # 每日 03:17 UTC：rollup 昨日 → 分批清理过期原始日志/会话/rollup
+# 03:17 UTC：rollup 昨日 → 分批清理过期原始日志/会话/rollup（+ 可选用量日报在链尾）
+# 每 5 分钟：渠道失败率报警评估（services/alerts.ts evaluateAlerts）
+crons = ["17 3 * * *", "*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

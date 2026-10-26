@@ -18,20 +18,35 @@ import {
 	getSessionTtlHours,
 	getTurnstileConfig,
 	isAdminPasswordSet,
+	loadAlertConfigDirect,
+	loadDailyReportFlagDirect,
 	loadDebugLogFlagDirect,
 	loadDeveloperNormalizeFlagDirect,
 	loadProxyRetryConfig,
 	loadRateLimitConfigDirect,
+	MAX_ALERT_FAILURE_RATE_PCT,
+	MAX_ALERT_MIN_SAMPLES,
+	MAX_ALERT_SILENCE_MINUTES,
+	MAX_ALERT_WINDOW_MINUTES,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
 	MAX_RATE_LIMIT_VALUE,
+	MIN_ALERT_FAILURE_RATE_PCT,
+	MIN_ALERT_MIN_SAMPLES,
+	MIN_ALERT_SILENCE_MINUTES,
+	MIN_ALERT_WINDOW_MINUTES,
 	MIN_PROXY_RETRY_DELAY_MS,
 	MIN_PROXY_RETRY_ROUNDS,
 	MIN_RATE_LIMIT_VALUE,
 	type RegistrationMode,
 	setAdminPasswordHash,
+	setAlertFailureRatePct,
+	setAlertMinSamples,
+	setAlertSilenceMinutes,
+	setAlertWindowMinutes,
 	setAnnouncement,
 	setCheckinReward,
+	setDailyReportFlag,
 	setDebugRequestBodyLog,
 	setDefaultBalance,
 	setDeveloperNormalizeFlag,
@@ -94,6 +109,10 @@ settings.get("/", async (c) => {
 	);
 	// 客户端限流两键同契约：直读 clamp 后有效值（表单即真相；缺失键 = 0 = 关闭）
 	const rateLimitConfig = await loadRateLimitConfigDirect(c.env.DB);
+	// 报警四键 + 日报开关同契约：直读 clamp 后有效值（评估器走 */5 cron 非请求
+	// 热路径，无缓存链；表单即真相）
+	const alertConfig = await loadAlertConfigDirect(c.env.DB);
+	const dailyReportEnabled = await loadDailyReportFlagDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -115,6 +134,12 @@ settings.get("/", async (c) => {
 		// 客户端限流两键（表单即真相：clamp 后有效值，缺失 = 0 = 关闭）
 		token_rpm_default: rateLimitConfig.tokenRpmDefault,
 		ip_auth_fail_limit: rateLimitConfig.ipAuthFailLimit,
+		// 报警四键（表单即真相：clamp 后有效值；阈值 0 = 关闭报警）
+		alert_failure_rate_pct: alertConfig.failureRatePct,
+		alert_min_samples: alertConfig.minSamples,
+		alert_silence_minutes: alertConfig.silenceMinutes,
+		alert_window_minutes: alertConfig.windowMinutes,
+		daily_report_enabled: dailyReportEnabled,
 		model_test_prompt: modelTestPrompt,
 		debug_request_body_log: debugRequestBodyLog,
 		normalize_developer_role: normalizeDeveloperRole,
@@ -360,6 +385,101 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setIpAuthFailLimit(c.env.DB, ipAuthFailLimit);
+		touched = true;
+	}
+
+	// 报警四键：写侧严格整数 + 各自范围校验（读侧 clamp / 脏值降默认在
+	// resolveAlertConfig——两级形态，无 env 层）；阈值 0 = 关闭报警
+	if (body.alert_failure_rate_pct !== undefined) {
+		const pct = Number(body.alert_failure_rate_pct);
+		if (
+			!Number.isInteger(pct) ||
+			pct < MIN_ALERT_FAILURE_RATE_PCT ||
+			pct > MAX_ALERT_FAILURE_RATE_PCT
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_alert_failure_rate_pct",
+				"invalid_alert_failure_rate_pct",
+			);
+		}
+		await setAlertFailureRatePct(c.env.DB, pct);
+		touched = true;
+	}
+
+	if (body.alert_min_samples !== undefined) {
+		const samples = Number(body.alert_min_samples);
+		if (
+			!Number.isInteger(samples) ||
+			samples < MIN_ALERT_MIN_SAMPLES ||
+			samples > MAX_ALERT_MIN_SAMPLES
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_alert_min_samples",
+				"invalid_alert_min_samples",
+			);
+		}
+		await setAlertMinSamples(c.env.DB, samples);
+		touched = true;
+	}
+
+	if (body.alert_silence_minutes !== undefined) {
+		const silence = Number(body.alert_silence_minutes);
+		if (
+			!Number.isInteger(silence) ||
+			silence < MIN_ALERT_SILENCE_MINUTES ||
+			silence > MAX_ALERT_SILENCE_MINUTES
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_alert_silence_minutes",
+				"invalid_alert_silence_minutes",
+			);
+		}
+		await setAlertSilenceMinutes(c.env.DB, silence);
+		touched = true;
+	}
+
+	if (body.alert_window_minutes !== undefined) {
+		const windowMinutes = Number(body.alert_window_minutes);
+		if (
+			!Number.isInteger(windowMinutes) ||
+			windowMinutes < MIN_ALERT_WINDOW_MINUTES ||
+			windowMinutes > MAX_ALERT_WINDOW_MINUTES
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_alert_window_minutes",
+				"invalid_alert_window_minutes",
+			);
+		}
+		await setAlertWindowMinutes(c.env.DB, windowMinutes);
+		touched = true;
+	}
+
+	// 日报开关：写侧严格布尔（同 normalize_developer_role 约定——仅接受
+	// true/false 布尔或 "true"/"false" 字符串，其余 400）
+	if (body.daily_report_enabled !== undefined) {
+		const value = body.daily_report_enabled;
+		if (
+			value !== true &&
+			value !== false &&
+			value !== "true" &&
+			value !== "false"
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_daily_report_enabled",
+				"invalid_daily_report_enabled",
+			);
+		}
+		await setDailyReportFlag(c.env.DB, value === true || value === "true");
 		touched = true;
 	}
 

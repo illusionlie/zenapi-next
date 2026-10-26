@@ -1,4 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { maybeSendDailyReport } from "./alerts";
 import { getRetentionDays } from "./settings";
 
 /**
@@ -504,6 +505,14 @@ export async function runDailyMaintenance(
 		console.log("[retention] usage_stats_daily pruned", { pruned });
 	} catch (e) {
 		console.error("[retention] rollup prune failed", { error: String(e) });
+	}
+
+	// Optional daily usage report (chain tail, fault-isolated like every step;
+	// default off — the strict-boolean flag read is the only cost when off).
+	try {
+		await maybeSendDailyReport(db, now);
+	} catch (e) {
+		console.error("[daily-report] failed", { error: String(e) });
 	}
 }
 

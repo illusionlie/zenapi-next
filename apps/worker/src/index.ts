@@ -25,6 +25,8 @@ import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
 import userApiRoutes from "./routes/user-api";
 import userAuthRoutes from "./routes/user-auth";
+import webhookRoutes from "./routes/webhooks";
+import { evaluateAlerts } from "./services/alerts";
 import { loadDebugLogFlag } from "./services/settings";
 import { runDailyMaintenance } from "./services/usage-stats";
 
@@ -173,6 +175,7 @@ app.route("/api/users", adminUserRoutes);
 app.route("/api/u/auth", userAuthRoutes);
 app.route("/api/u", userApiRoutes);
 app.route("/api/recharge", rechargeRoutes);
+app.route("/api/webhooks", webhookRoutes);
 
 app.route("/v1", proxyRoutes);
 app.route("/anthropic/v1", anthropicProxyRoutes);
@@ -214,16 +217,29 @@ app.notFound(async (c) => {
 });
 
 /**
- * Daily cron handler (03:17 UTC, wrangler.toml [triggers]): rollup yesterday,
- * then batched prunes (raw logs / expired sessions / old rollups). Steps are
- * fault-isolated inside runDailyMaintenance. Direct await — a cron invocation
- * keeps the isolate alive for the whole chain (15-minute wall clock budget).
+ * Cron dispatcher (wrangler.toml [triggers]): the 03:17 UTC entry keeps its
+ * historical semantics — rollup yesterday, then batched prunes (raw logs /
+ * expired sessions / old rollups) — via runDailyMaintenance; the
+ * every-5-minutes entry runs the channel failure-rate alert evaluator.
+ * Steps are fault-isolated inside each handler. Direct await — a cron
+ * invocation keeps the isolate alive for the whole chain (15-minute wall
+ * clock budget).
  */
+/** The every-5-minutes entry (see wrangler.toml [triggers] crons array). */
+const ALERT_EVALUATION_CRON = "*/5 * * * *";
+
 const scheduled = (
-	_event: ScheduledEvent,
+	event: ScheduledEvent,
 	env: Bindings,
 	_ctx: ExecutionContext,
-): Promise<void> => runDailyMaintenance(env.DB);
+): Promise<void> => {
+	if (event.cron === ALERT_EVALUATION_CRON) {
+		return evaluateAlerts(env.DB);
+	}
+	return runDailyMaintenance(env.DB);
+};
+
+export { scheduled };
 
 export default {
 	fetch: app.fetch,
