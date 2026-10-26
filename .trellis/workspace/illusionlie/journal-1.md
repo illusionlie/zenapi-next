@@ -702,3 +702,17 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+## Session 21: ai-relay 调研采纳批次立项 + count_tokens 端点
+
+**Date**: 2026-10-26
+**Task**: 网关增强批次（父任务 10-26-gateway-adoption-batch，8 子任务）
+**Branch**: `main`
+
+### Summary
+
+对 MoyuFamily/ai-relay 三路子代理源码调研（路由可靠性/管理台运维/存储部署），主会话逐项核实（count_tokens 404、tokens 无过期、隐私头透传泄露 IP）后与维护者逐条拍板：采纳 count_tokens/令牌过期/隐私头剔除/限流/key 冷却统计/备份恢复/webhook 报警/主动探测（默认关），拒绝渠道模板。建父任务 + 8 子任务并写全 PRD（含拍板记录与验收锚点）。首个子任务 count-tokens-endpoint 完成：/messages 热路径最小抽取 3 个共享 helper（逐字保留、交换的两段计算无共享状态），/messages/count_tokens 治理同链 + anthropic 目标单次透传 + 失败/非 anthropic 目标本地粗估 ceil(len/4) 恒 200，零计费；确定性测试 12 个，全量 741 绿；AGENTS.md §6/§8 锚点。澄清：代理热路径不解析全局 model_aliases（仅渠道级），count_tokens 与 /messages 同语义。
+
+### Status
+
+[Continuing] 批次 1/8 完成，余 7 子任务排队（privacy-header-strip 下一个）
