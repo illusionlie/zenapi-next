@@ -3,7 +3,8 @@ import type { Token } from "../core/types";
 import { buildPageItems, formatDateTime } from "../core/utils";
 import { Modal } from "./Modal";
 import { ModelAllowlistPicker } from "./ModelAllowlistPicker";
-import { renderModelLimit } from "./TokensView";
+import { TokenExpiryPicker } from "./TokenExpiryPicker";
+import { renderModelLimit, renderTokenExpiry } from "./TokensView";
 
 type UserTokensViewProps = {
 	pagedTokens: Token[];
@@ -11,8 +12,9 @@ type UserTokensViewProps = {
 	tokenPageSize: number;
 	tokenTotal: number;
 	tokenTotalPages: number;
-	// 创建表单状态留在组件内,提交时回调 (name, allowedModels) 签名保持不变
-	onCreate: (name: string, allowedModels: string[]) => void;
+	// 创建表单状态留在组件内,提交时回调 (name, allowedModels, expiresAt);
+	// expiresAt 为选择器解析后的 ISO(空串 = 永久)
+	onCreate: (name: string, allowedModels: string[], expiresAt: string) => void;
 	onPageChange: (next: number) => void;
 	onPageSizeChange: (next: number) => void;
 	onToggle: (id: string, status: string) => void;
@@ -21,7 +23,11 @@ type UserTokensViewProps = {
 	editingToken: Token | null;
 	onEdit: (token: Token) => void;
 	onCloseEditModal: () => void;
-	onEditSubmit: (data: { name: string; allowedModels: string[] }) => void;
+	onEditSubmit: (data: {
+		name: string;
+		allowedModels: string[];
+		expiresAt: string;
+	}) => void;
 	onFetchModelCandidates: () => Promise<string[]>;
 };
 
@@ -56,24 +62,28 @@ export const UserTokensView = ({
 	const [createSelectedModels, setCreateSelectedModels] = useState<Set<string>>(
 		() => new Set<string>(),
 	);
+	// 创建模态的有效期(选择器解析后的 ISO;空串 = 永久),随 resetModal 重置
+	const [createExpiresAt, setCreateExpiresAt] = useState("");
 	const pageItems = buildPageItems(tokenPage, tokenTotalPages);
 
 	const resetModal = () => {
 		setShowCreateModal(false);
 		setTokenName("");
 		setCreateSelectedModels(new Set());
+		setCreateExpiresAt("");
 	};
 
 	const openCreate = () => {
 		setTokenName("");
 		setCreateSelectedModels(new Set());
+		setCreateExpiresAt("");
 		setShowCreateModal(true);
 	};
 
 	const handleCreate = (e: Event) => {
 		e.preventDefault();
 		if (!tokenName.trim()) return;
-		onCreate(tokenName.trim(), [...createSelectedModels]);
+		onCreate(tokenName.trim(), [...createSelectedModels], createExpiresAt);
 		resetModal();
 	};
 
@@ -135,7 +145,7 @@ export const UserTokensView = ({
 										{tokenItem.quota_used} / {tokenItem.quota_total ?? "∞"}
 									</div>
 									<div>{renderModelLimit(tokenItem)}</div>
-									<div>
+									<div class="flex flex-col items-start gap-1">
 										<span
 											class={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
 												isActive
@@ -145,6 +155,7 @@ export const UserTokensView = ({
 										>
 											{isActive ? "启用" : "停用"}
 										</span>
+										{renderTokenExpiry(tokenItem)}
 									</div>
 									<div class="text-sm text-stone-700">
 										{formatDateTime(tokenItem.created_at)}
@@ -209,15 +220,18 @@ export const UserTokensView = ({
 											{tokenItem.key_prefix ?? "-"}
 										</span>
 									</div>
-									<span
-										class={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
-											isActive
-												? "border-emerald-100 bg-emerald-50 text-emerald-600"
-												: "border-stone-200 bg-stone-100 text-stone-500"
-										}`}
-									>
-										{isActive ? "启用" : "停用"}
-									</span>
+									<div class="flex shrink-0 flex-col items-end gap-1">
+										<span
+											class={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
+												isActive
+													? "border-emerald-100 bg-emerald-50 text-emerald-600"
+													: "border-stone-200 bg-stone-100 text-stone-500"
+											}`}
+										>
+											{isActive ? "启用" : "停用"}
+										</span>
+										{renderTokenExpiry(tokenItem)}
+									</div>
 								</div>
 								<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
 									<span>
@@ -378,6 +392,11 @@ export const UserTokensView = ({
 							}
 						/>
 					</div>
+					<TokenExpiryPicker
+						idPrefix="user-token-create"
+						value={createExpiresAt}
+						onChange={setCreateExpiresAt}
+					/>
 					<ModelAllowlistPicker
 						label="模型白名单"
 						emptyHint="未选择 = 不限制，可调用全部可用模型"
@@ -430,10 +449,14 @@ type EditTokenFormProps = {
 	token: Token;
 	fetchCandidates: () => Promise<string[]>;
 	onCancel: () => void;
-	onSubmit: (data: { name: string; allowedModels: string[] }) => void;
+	onSubmit: (data: {
+		name: string;
+		allowedModels: string[];
+		expiresAt: string;
+	}) => void;
 };
 
-/** 编辑令牌表单:仅名称 + 模型白名单,无任何额度字段(额度仅管理员可改) */
+/** 编辑令牌表单:名称 + 模型白名单 + 有效期,无任何额度字段(额度仅管理员可改) */
 const EditTokenForm = ({
 	token,
 	fetchCandidates,
@@ -444,10 +467,16 @@ const EditTokenForm = ({
 	const [selectedModels, setSelectedModels] = useState<Set<string>>(
 		() => new Set(token.allowed_models ?? []),
 	);
+	// 有效期(选择器解析后的 ISO;空串 = 永久),回填现值(含已过期时刻 → 可改期续约)
+	const [expiresAt, setExpiresAt] = useState(token.expires_at ?? "");
 
 	const handleSubmit = (e: Event) => {
 		e.preventDefault();
-		onSubmit({ name: name.trim(), allowedModels: [...selectedModels] });
+		onSubmit({
+			name: name.trim(),
+			allowedModels: [...selectedModels],
+			expiresAt,
+		});
 	};
 
 	return (
@@ -457,7 +486,7 @@ const EditTokenForm = ({
 					<h3 class="mb-1 font-['Space_Grotesk'] text-lg tracking-tight text-stone-900">
 						编辑令牌
 					</h3>
-					<p class="text-xs text-stone-500">修改名称与模型白名单。</p>
+					<p class="text-xs text-stone-500">修改名称、有效期与模型白名单。</p>
 				</div>
 				<button
 					class="h-10 md:h-9 rounded-full border border-stone-200 bg-stone-50 px-3 text-xs font-semibold text-stone-500 transition-[transform,box-shadow,color,background-color,border-color] duration-200 ease-smooth-out hover:-translate-y-0.5 hover:text-stone-900 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
@@ -486,6 +515,11 @@ const EditTokenForm = ({
 						}
 					/>
 				</div>
+				<TokenExpiryPicker
+					idPrefix="user-token-edit"
+					value={expiresAt}
+					onChange={setExpiresAt}
+				/>
 				<ModelAllowlistPicker
 					label="模型白名单"
 					emptyHint="未选择 = 不限制，可调用全部可用模型"

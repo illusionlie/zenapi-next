@@ -44,6 +44,8 @@ export type Token = {
 	allowed_channels?: string | null;
 	/** 令牌级模型白名单(服务端已还原为数组;null/空数组 = 不限制) */
 	allowed_models?: string[] | null;
+	/** 可选过期时间(ISO-8601;null = 永久)。状态由渲染层惰性计算,不落库 */
+	expires_at?: string | null;
 	created_at?: string | null;
 	updated_at?: string | null;
 };
@@ -313,12 +315,14 @@ export type ChannelForm = {
 	models: string;
 };
 
-/** 令牌编辑表单(管理台):额度字段以 string 承接 input,提交时转换 */
+/** 令牌编辑表单(管理台):额度字段以 string 承接 input,提交时转换;
+ *  expires_at 为有效期选择器解析后的 ISO 串(空串 = 永久,提交时转 null) */
 export type TokenForm = {
 	name: string;
 	quota_total: string;
 	quota_used: string;
 	allowed_models: string[];
+	expires_at: string;
 };
 
 export type SettingsForm = {

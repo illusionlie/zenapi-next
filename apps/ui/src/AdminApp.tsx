@@ -178,6 +178,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 	const [tokenCreateModels, setTokenCreateModels] = useState<Set<string>>(
 		() => new Set<string>(),
 	);
+	// 创建模态的有效期(选择器解析后的 ISO;空串 = 永久),与 tokenCreateModels 同构管理
+	const [tokenCreateExpiresAt, setTokenCreateExpiresAt] = useState("");
 	const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
 	const [users, setUsers] = useState<User[]>([]);
 	const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
@@ -399,6 +401,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 
 	const openTokenCreate = useCallback(() => {
 		setTokenCreateModels(new Set());
+		setTokenCreateExpiresAt("");
 		setTokenModalOpen(true);
 	}, []);
 
@@ -413,6 +416,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			quota_total: target.quota_total == null ? "" : String(target.quota_total),
 			quota_used: String(target.quota_used),
 			allowed_models: [...(target.allowed_models ?? [])],
+			// 已过期/未来时刻都回填为解析后的 ISO(选择器进「自定义」档);NULL → 空 = 永久
+			expires_at: target.expires_at ?? "",
 		});
 	}, []);
 
@@ -625,6 +630,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 						quota_total: payload.quota_total
 							? Number(payload.quota_total)
 							: null,
+						// 有效期:空串 = 永久(null);ISO 串由后端校验须晚于当前时刻
+						expires_at:
+							tokenCreateExpiresAt.trim() === "" ? null : tokenCreateExpiresAt,
 						// 仅在选择模型时携带;缺省由服务端落 NULL(不限制)
 						...(tokenCreateModels.size > 0
 							? { allowed_models: [...tokenCreateModels] }
@@ -635,6 +643,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				setSecretModal({ title: "新令牌已创建", value: result.token });
 				form.reset();
 				setTokenCreateModels(new Set());
+				setTokenCreateExpiresAt("");
 				setTokenModalOpen(false);
 				setTokenPage(1);
 				await loadTokens();
@@ -642,11 +651,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				toast.error((error as Error).message);
 			}
 		},
-		[apiFetch, loadTokens, tokenCreateModels],
+		[apiFetch, loadTokens, tokenCreateExpiresAt, tokenCreateModels],
 	);
 
 	// 编辑提交:三态 PATCH —— 额度总额空串→null(清回无限),已用额度清空提交即归零,
-	// allowed_models 恒传数组(空数组 = 清回不限制)
+	// allowed_models 恒传数组(空数组 = 清回不限制),expires_at 恒传(空串→null = 永久)
 	const handleTokenEditSubmit = useCallback(
 		async (event: Event) => {
 			event.preventDefault();
@@ -662,6 +671,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 								: Number(tokenForm.quota_total),
 						quota_used: Number(tokenForm.quota_used || 0),
 						allowed_models: tokenForm.allowed_models,
+						expires_at:
+							tokenForm.expires_at.trim() === "" ? null : tokenForm.expires_at,
 					}),
 				});
 				toast.success("令牌已更新");
@@ -1340,6 +1351,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 					editingToken={editingToken}
 					tokenForm={tokenForm}
 					onTokenFormChange={handleTokenFormChange}
+					tokenCreateExpiresAt={tokenCreateExpiresAt}
+					onTokenCreateExpiresAtChange={setTokenCreateExpiresAt}
 					createSelectedModels={tokenCreateModels}
 					onCreateModelsChange={handleTokenCreateModelsChange}
 					onEdit={openTokenEdit}

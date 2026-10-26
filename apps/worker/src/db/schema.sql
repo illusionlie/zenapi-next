@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS tokens (
   status TEXT NOT NULL DEFAULT 'active',
   allowed_channels TEXT,
   allowed_models TEXT,
+  -- 可选过期时间（ISO-8601 UTC；NULL = 永久）。到期由 tokenAuth 惰性判定拒绝，
+  -- 不翻 status、不删除行（迁移 0028 加列，无回填）。
+  expires_at TEXT,
   user_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

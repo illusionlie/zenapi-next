@@ -91,6 +91,7 @@ export const initialTokenForm: TokenForm = {
 	quota_total: "",
 	quota_used: "",
 	allowed_models: [],
+	expires_at: "",
 };
 
 export const initialSettingsForm: SettingsForm = {

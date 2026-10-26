@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	resolveExpiresAtValue,
 	resolveTokenUpdate,
 	resolveUserTokenUpdate,
 } from "../apps/worker/src/services/token-update";
@@ -15,6 +16,7 @@ const existing: ExistingToken = {
 	status: "active",
 	allowed_channels: '["ch1"]',
 	allowed_models: '["gpt-4o"]',
+	expires_at: "2099-01-01T00:00:00.000Z",
 };
 
 const valuesOf = (body: unknown) => {
@@ -67,6 +69,7 @@ describe("resolveTokenUpdate", () => {
 			expect(values.status).toBe("active");
 			expect(values.allowed_channels).toBe('["ch1"]');
 			expect(values.allowed_models).toBe('["gpt-4o"]');
+			expect(values.expires_at).toBe("2099-01-01T00:00:00.000Z");
 		});
 	});
 
@@ -249,6 +252,56 @@ describe("resolveTokenUpdate", () => {
 		});
 	});
 
+	describe("expires_at", () => {
+		const futureIso = () => new Date(Date.now() + 3600_000).toISOString();
+		const pastIso = () => new Date(Date.now() - 3600_000).toISOString();
+
+		it("keeps the existing value for undefined", () => {
+			expect(valuesOf({}).expires_at).toBe("2099-01-01T00:00:00.000Z");
+		});
+
+		it("clears to NULL (permanent) for null and empty string", () => {
+			expect(valuesOf({ expires_at: null }).expires_at).toBeNull();
+			expect(valuesOf({ expires_at: "" }).expires_at).toBeNull();
+		});
+
+		it("sets and normalizes a future ISO-8601 value", () => {
+			const iso = futureIso();
+			expect(valuesOf({ expires_at: iso }).expires_at).toBe(iso);
+			// 归一化:无毫秒的合法 ISO 输入 → toISOString 存储不变量
+			expect(valuesOf({ expires_at: "2099-06-01T08:00:00Z" }).expires_at).toBe(
+				"2099-06-01T08:00:00.000Z",
+			);
+		});
+
+		it("rejects past dates, garbage strings and non-strings", () => {
+			expect(resolveTokenUpdate({ expires_at: pastIso() }, existing)).toEqual({
+				ok: false,
+				error: "invalid_expires_at",
+			});
+			expect(resolveTokenUpdate({ expires_at: "tomorrow" }, existing)).toEqual({
+				ok: false,
+				error: "invalid_expires_at",
+			});
+			expect(resolveTokenUpdate({ expires_at: 42 }, existing)).toEqual({
+				ok: false,
+				error: "invalid_expires_at",
+			});
+		});
+
+		it("renewal path: an expired token PATCHed to the future yields a future value", () => {
+			// 「已过期令牌续期」的 resolver 半段(tokenAuth 半段见 token-auth.test.ts)
+			const expired: ExistingToken = { ...existing, expires_at: pastIso() };
+			const result = resolveTokenUpdate({ expires_at: futureIso() }, expired);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(new Date(result.values.expires_at ?? 0).getTime()).toBeGreaterThan(
+					Date.now(),
+				);
+			}
+		});
+	});
+
 	describe("combined updates", () => {
 		it("applies several valid fields in one pass", () => {
 			const values = valuesOf({
@@ -258,6 +311,7 @@ describe("resolveTokenUpdate", () => {
 				status: "disabled",
 				allowed_channels: null,
 				allowed_models: ["claude-sonnet-4"],
+				expires_at: null,
 			});
 			expect(values).toEqual({
 				name: "renamed",
@@ -266,13 +320,15 @@ describe("resolveTokenUpdate", () => {
 				status: "disabled",
 				allowed_channels: null,
 				allowed_models: '["claude-sonnet-4"]',
+				expires_at: null,
 			});
 		});
 
 		it("does not mutate the existing row", () => {
-			valuesOf({ name: "renamed", quota_total: null });
+			valuesOf({ name: "renamed", quota_total: null, expires_at: null });
 			expect(existing.quota_total).toBe(100);
 			expect(existing.name).toBe("old-name");
+			expect(existing.expires_at).toBe("2099-01-01T00:00:00.000Z");
 		});
 	});
 });
@@ -281,6 +337,7 @@ const userExisting: UserExistingToken = {
 	name: "old-name",
 	status: "active",
 	allowed_models: '["gpt-4o"]',
+	expires_at: "2099-01-01T00:00:00.000Z",
 };
 
 const userValuesOf = (body: unknown) => {
@@ -409,25 +466,94 @@ describe("resolveUserTokenUpdate", () => {
 		});
 	});
 
+	describe("expires_at", () => {
+		const futureIso = () => new Date(Date.now() + 3600_000).toISOString();
+		const pastIso = () => new Date(Date.now() - 3600_000).toISOString();
+
+		it("keeps the existing value for undefined", () => {
+			expect(userValuesOf({}).expires_at).toBe("2099-01-01T00:00:00.000Z");
+		});
+
+		it("clears to NULL (permanent) for null and empty string", () => {
+			expect(userValuesOf({ expires_at: null }).expires_at).toBeNull();
+			expect(userValuesOf({ expires_at: "" }).expires_at).toBeNull();
+		});
+
+		it("sets and normalizes a future ISO value", () => {
+			const iso = futureIso();
+			expect(userValuesOf({ expires_at: iso }).expires_at).toBe(iso);
+		});
+
+		it("rejects past dates and non-strings", () => {
+			expect(
+				resolveUserTokenUpdate({ expires_at: pastIso() }, userExisting),
+			).toEqual({ ok: false, error: "invalid_expires_at" });
+			expect(
+				resolveUserTokenUpdate({ expires_at: "soon" }, userExisting),
+			).toEqual({ ok: false, error: "invalid_expires_at" });
+			expect(
+				resolveUserTokenUpdate({ expires_at: true }, userExisting),
+			).toEqual({ ok: false, error: "invalid_expires_at" });
+		});
+	});
+
 	describe("combined updates", () => {
-		it("applies name, status and allowed_models in one pass", () => {
+		it("applies name, status, allowed_models and expires_at in one pass", () => {
 			const values = userValuesOf({
 				name: "renamed",
 				status: "disabled",
 				allowed_models: ["claude-sonnet-4"],
+				expires_at: null,
 			});
 			expect(values).toEqual({
 				name: "renamed",
 				status: "disabled",
 				allowed_models: '["claude-sonnet-4"]',
+				expires_at: null,
 			});
 		});
 
 		it("does not mutate the existing row", () => {
-			userValuesOf({ name: "renamed", status: "disabled" });
+			userValuesOf({ name: "renamed", status: "disabled", expires_at: null });
 			expect(userExisting.name).toBe("old-name");
 			expect(userExisting.status).toBe("active");
 			expect(userExisting.allowed_models).toBe('["gpt-4o"]');
+			expect(userExisting.expires_at).toBe("2099-01-01T00:00:00.000Z");
+		});
+	});
+});
+
+describe("resolveExpiresAtValue (POST 创建语义的单一校验门)", () => {
+	const futureIso = () => new Date(Date.now() + 3600_000).toISOString();
+	const pastIso = () => new Date(Date.now() - 3600_000).toISOString();
+
+	it("treats undefined / null / empty string as permanent (NULL)", () => {
+		expect(resolveExpiresAtValue(undefined)).toEqual({ ok: true, value: null });
+		expect(resolveExpiresAtValue(null)).toEqual({ ok: true, value: null });
+		expect(resolveExpiresAtValue("")).toEqual({ ok: true, value: null });
+	});
+
+	it("accepts a future ISO value and normalizes it", () => {
+		const iso = futureIso();
+		expect(resolveExpiresAtValue(iso)).toEqual({ ok: true, value: iso });
+		expect(resolveExpiresAtValue("2099-06-01T08:00:00Z")).toEqual({
+			ok: true,
+			value: "2099-06-01T08:00:00.000Z",
+		});
+	});
+
+	it("rejects past dates, unparseable strings and non-strings", () => {
+		expect(resolveExpiresAtValue(pastIso())).toEqual({
+			ok: false,
+			error: "invalid_expires_at",
+		});
+		expect(resolveExpiresAtValue("garbage")).toEqual({
+			ok: false,
+			error: "invalid_expires_at",
+		});
+		expect(resolveExpiresAtValue(42)).toEqual({
+			ok: false,
+			error: "invalid_expires_at",
 		});
 	});
 });

@@ -1,7 +1,12 @@
 import type { Token, TokenForm } from "../core/types";
-import { buildPageItems, formatDateTime } from "../core/utils";
+import {
+	buildPageItems,
+	formatDateTime,
+	getTokenExpiryState,
+} from "../core/utils";
 import { Modal } from "./Modal";
 import { ModelAllowlistPicker } from "./ModelAllowlistPicker";
+import { TokenExpiryPicker } from "./TokenExpiryPicker";
 
 type TokensViewProps = {
 	pagedTokens: Token[];
@@ -21,6 +26,9 @@ type TokensViewProps = {
 	editingToken: Token | null;
 	tokenForm: TokenForm;
 	onTokenFormChange: (patch: Partial<TokenForm>) => void;
+	/** 创建模态的有效期(选择器解析后的 ISO;空串 = 永久),随 tokenCreateModels 同构提升 */
+	tokenCreateExpiresAt: string;
+	onTokenCreateExpiresAtChange: (next: string) => void;
 	createSelectedModels: Set<string>;
 	onCreateModelsChange: (next: Set<string>) => void;
 	onEdit: (token: Token) => void;
@@ -47,6 +55,29 @@ export const renderModelLimit = (token: Token) => {
 	);
 };
 
+/** 「有效期」状态(渲染层惰性计算,不落库):已过期红徽标 / 剩余时长;永久(NULL)不渲染 */
+export const renderTokenExpiry = (token: Token) => {
+	const state = getTokenExpiryState(token.expires_at);
+	if (state.kind === "permanent") {
+		return null;
+	}
+	if (state.kind === "expired") {
+		return (
+			<span class="inline-flex items-center rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600">
+				已过期
+			</span>
+		);
+	}
+	return (
+		<span
+			class="text-xs text-stone-400"
+			title={formatDateTime(state.expiresAt)}
+		>
+			剩余 {state.remainingLabel}
+		</span>
+	);
+};
+
 /**
  * Renders the tokens management view.
  */
@@ -68,6 +99,8 @@ export const TokensView = ({
 	editingToken,
 	tokenForm,
 	onTokenFormChange,
+	tokenCreateExpiresAt,
+	onTokenCreateExpiresAtChange,
 	createSelectedModels,
 	onCreateModelsChange,
 	onEdit,
@@ -141,7 +174,7 @@ export const TokensView = ({
 												<span class="text-sm text-stone-400">-</span>
 											)}
 										</div>
-										<div>
+										<div class="flex flex-col items-start gap-1">
 											<span
 												class={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
 													isActive
@@ -151,6 +184,7 @@ export const TokensView = ({
 											>
 												{isActive ? "启用" : "禁用"}
 											</span>
+											{renderTokenExpiry(tokenItem)}
 										</div>
 										<div class="text-sm font-semibold text-stone-700">
 											{tokenItem.quota_used} / {tokenItem.quota_total ?? "∞"}
@@ -222,15 +256,18 @@ export const TokensView = ({
 												{tokenItem.key_prefix ?? "-"}
 											</span>
 										</div>
-										<span
-											class={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
-												isActive
-													? "border-emerald-100 bg-emerald-50 text-emerald-600"
-													: "border-stone-200 bg-stone-100 text-stone-500"
-											}`}
-										>
-											{isActive ? "启用" : "禁用"}
-										</span>
+										<div class="flex shrink-0 flex-col items-end gap-1">
+											<span
+												class={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
+													isActive
+														? "border-emerald-100 bg-emerald-50 text-emerald-600"
+														: "border-stone-200 bg-stone-100 text-stone-500"
+												}`}
+											>
+												{isActive ? "启用" : "禁用"}
+											</span>
+											{renderTokenExpiry(tokenItem)}
+										</div>
 									</div>
 									<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
 										{tokenItem.user_name && (
@@ -409,6 +446,11 @@ export const TokensView = ({
 							placeholder="留空表示无限"
 						/>
 					</div>
+					<TokenExpiryPicker
+						idPrefix="token-create"
+						value={tokenCreateExpiresAt}
+						onChange={onTokenCreateExpiresAtChange}
+					/>
 					<ModelAllowlistPicker
 						label="模型白名单"
 						emptyHint="未选择 = 不限制，可调用全部可用模型"
@@ -529,6 +571,11 @@ export const TokensView = ({
 									/>
 								</div>
 							</div>
+							<TokenExpiryPicker
+								idPrefix="token-edit"
+								value={tokenForm.expires_at}
+								onChange={(next) => onTokenFormChange({ expires_at: next })}
+							/>
 							<ModelAllowlistPicker
 								label="模型白名单"
 								emptyHint="未选择 = 不限制，可调用全部可用模型"

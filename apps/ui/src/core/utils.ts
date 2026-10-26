@@ -188,6 +188,51 @@ export const buildPageItems = (current: number, total: number): PageItem[] => {
 export const formatCacheRate = (rate: number | null | undefined) =>
 	rate === null || rate === undefined ? "—" : `${Math.round(rate * 100)}%`;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 令牌有效期展示态(渲染层惰性计算,不落库) */
+export type TokenExpiryState =
+	| { kind: "permanent" }
+	| { kind: "expired" }
+	| { kind: "active"; remainingLabel: string; expiresAt: string };
+
+/**
+ * Computes a token's expiry display state from the raw `expires_at` value.
+ * - null/empty/unparseable → permanent (unparseable fails open, matching the
+ *   worker's tokenAuth gate — dirty stored rows never render as "expired")
+ * - past timestamp → expired
+ * - future timestamp → remaining duration label (days rounded up; "<1d"
+ *   inside a day)
+ *
+ * Args:
+ *   expiresAt: Raw ISO string or null.
+ *   now: Evaluation instant (injectable for tests).
+ *
+ * Returns:
+ *   TokenExpiryState.
+ */
+export const getTokenExpiryState = (
+	expiresAt: string | null | undefined,
+	now: number = Date.now(),
+): TokenExpiryState => {
+	if (!expiresAt) {
+		return { kind: "permanent" };
+	}
+	const ms = new Date(expiresAt).getTime();
+	if (Number.isNaN(ms)) {
+		return { kind: "permanent" };
+	}
+	if (ms <= now) {
+		return { kind: "expired" };
+	}
+	const days = Math.ceil((ms - now) / DAY_MS);
+	return {
+		kind: "active",
+		remainingLabel: days >= 1 ? `${days}d` : "<1d",
+		expiresAt,
+	};
+};
+
 /**
  * Bar color for cache hit rates, following monitoring-shared.ts band style.
  *

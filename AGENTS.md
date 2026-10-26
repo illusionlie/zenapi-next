@@ -80,7 +80,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 | `/api/channels` | `routes/channels.ts` | 渠道 CRUD、连通性测试（`/v1/models`）、单模型真实对话测试（`/test-model`）、模型拉取 |
 | `/api/models` | `routes/models.ts` | 模型广场聚合（仅启用渠道） |
 | `/api/model-aliases` | `routes/model-aliases.ts` | 模型别名映射 |
-| `/api/tokens` | `routes/tokens.ts` | API 令牌 CRUD、令牌级模型白名单、额度编辑（三态 PATCH）、`/reveal` 二次查看明文 |
+| `/api/tokens` | `routes/tokens.ts` | API 令牌 CRUD、令牌级模型白名单、额度编辑（三态 PATCH）、可选过期时间 `expires_at`（到期**禁用不删除**——tokenAuth 惰性判定 403 `token_expired`，非法存量值 fail-open，PATCH 续期即恢复）、`/reveal` 二次查看明文 |
 | `/api/usage` | `routes/usage.ts` | 使用日志查询与保留清理 |
 | `/api/dashboard` | `routes/dashboard.ts` | 聚合统计 |
 | `/api/monitoring` | `routes/monitoring.ts` | 渠道健康 / 成功率 / 延迟（15m/1h/1d/7d/30d，管理员专用） |
@@ -141,7 +141,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 
 `apps/worker/src/db/schema.sql` 定义全部表。核心域：
 
-- **代理**：`channels`（含 `api_formats` 多格式能力声明 + `api_format` 镜像首元素 + `endpoint_overrides` 每格式端点覆盖）、`tokens`（含 `allowed_models` 令牌级白名单）、`usage_logs`（含 `cached_input_tokens` / `cache_creation_tokens` 缓存列，NULL = 上游未报告）、`usage_stats_daily`（日粒度预聚合，rollup 180d 保留）、`model_aliases`、`channel_model_aliases`
+- **代理**：`channels`（含 `api_formats` 多格式能力声明 + `api_format` 镜像首元素 + `endpoint_overrides` 每格式端点覆盖）、`tokens`（含 `allowed_models` 令牌级白名单 + `expires_at` 可选过期）、`usage_logs`（含 `cached_input_tokens` / `cache_creation_tokens` 缓存列，NULL = 上游未报告）、`usage_stats_daily`（日粒度预聚合，rollup 180d 保留）、`model_aliases`、`channel_model_aliases`
 - **会话/设置**：`admin_sessions`、`settings`
 - **用户体系**：`users`（含 `allowed_models` 白名单）、`user_sessions`、`user_checkins`、`invite_codes`
 - **资金**：`recharge_orders`

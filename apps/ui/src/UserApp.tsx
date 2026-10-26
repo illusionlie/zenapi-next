@@ -237,12 +237,14 @@ export const UserApp = ({
 	}, [apiFetch, onUserRefresh]);
 
 	const handleTokenCreate = useCallback(
-		async (name: string, allowedModels: string[]) => {
+		async (name: string, allowedModels: string[], expiresAt: string) => {
 			try {
 				const result = await apiFetch<{ token: string }>("/api/u/tokens", {
 					method: "POST",
 					body: JSON.stringify({
 						name,
+						// 有效期:空串 = 永久(null);ISO 串由后端校验须晚于当前时刻
+						expires_at: expiresAt.trim() === "" ? null : expiresAt,
 						// 仅在选择模型时携带;缺省由服务端落 NULL(不限制)
 						...(allowedModels.length > 0
 							? { allowed_models: allowedModels }
@@ -259,7 +261,7 @@ export const UserApp = ({
 		[apiFetch, loadTokens],
 	);
 
-	// 编辑提交:仅名称 + 模型白名单
+	// 编辑提交:名称 + 模型白名单 + 有效期(空串 = 永久)
 	const openTokenEdit = useCallback((target: Token) => {
 		setEditingToken(target);
 	}, []);
@@ -267,7 +269,11 @@ export const UserApp = ({
 	const closeTokenEdit = useCallback(() => setEditingToken(null), []);
 
 	const handleTokenEditSubmit = useCallback(
-		async (data: { name: string; allowedModels: string[] }) => {
+		async (data: {
+			name: string;
+			allowedModels: string[];
+			expiresAt: string;
+		}) => {
 			if (!editingToken) return;
 			try {
 				await apiFetch(`/api/u/tokens/${editingToken.id}`, {
@@ -276,6 +282,8 @@ export const UserApp = ({
 						name: data.name,
 						// 恒传数组:空数组 = 清回不限制
 						allowed_models: data.allowedModels,
+						// 恒传有效期:空串转 null = 永久(已过期令牌改到未来即刻恢复)
+						expires_at: data.expiresAt.trim() === "" ? null : data.expiresAt,
 					}),
 				});
 				toast.success("令牌已更新");

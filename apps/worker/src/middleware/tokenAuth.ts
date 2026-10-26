@@ -14,6 +14,8 @@ export type TokenRecord = {
 	status: string;
 	allowed_channels: string | null;
 	allowed_models: string | null;
+	/** Optional expiry (ISO-8601 UTC; null = permanent). Evaluated lazily below. */
+	expires_at: string | null;
 	user_id: string | null;
 	/** Joined users.balance (null when the token has no user or the user row is missing). */
 	user_balance?: number | null;
@@ -46,7 +48,7 @@ export const tokenAuth = createMiddleware<AppEnv>(async (c, next) => {
 	// the same `user_disabled` rejection as the old missing-row path.
 	const record = await c.env.DB.prepare(
 		`SELECT t.id, t.name, t.quota_total, t.quota_used, t.status,
-		        t.allowed_channels, t.allowed_models, t.user_id,
+		        t.allowed_channels, t.allowed_models, t.user_id, t.expires_at,
 		        u.balance AS user_balance, u.status AS user_status,
 		        u.allowed_models AS user_allowed_models_raw
 		 FROM tokens t
@@ -62,6 +64,20 @@ export const tokenAuth = createMiddleware<AppEnv>(async (c, next) => {
 
 	if (record.status !== "active") {
 		return jsonError(c, 403, "token_disabled", "token_disabled");
+	}
+
+	// Lazy expiry gate (task 10-26-token-expiry R2): an expired token is
+	// rejected in place — never deleted, never status-flipped (expiry is a
+	// computed state; `status` stays the admin-intent state). Comparison is
+	// millisecond-precision ISO parsing, mirroring the session-expiry
+	// precedent in adminAuth/userAuth. Invalid stored values parse to NaN,
+	// and `NaN <= anything` is false → fail open (treated as permanent), so
+	// legacy dirty rows never brick live traffic.
+	if (
+		record.expires_at &&
+		new Date(record.expires_at).getTime() <= Date.now()
+	) {
+		return jsonError(c, 403, "token_expired", "token_expired");
 	}
 
 	const quotaTotal =

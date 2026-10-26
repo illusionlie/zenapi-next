@@ -11,6 +11,8 @@ export type ExistingToken = {
 	status: string;
 	allowed_channels: string | null;
 	allowed_models: string | null;
+	/** Optional expiry (ISO-8601 UTC; null = permanent). */
+	expires_at: string | null;
 };
 
 /** Final column values to write back after a successful update. */
@@ -22,11 +24,40 @@ export type TokenUpdateError =
 	| "invalid_name"
 	| "invalid_quota"
 	| "invalid_status"
-	| "invalid_allowed_models";
+	| "invalid_allowed_models"
+	| "invalid_expires_at";
 
 export type TokenUpdateResult =
 	| { ok: true; values: TokenUpdateValues }
 	| { ok: false; error: TokenUpdateError };
+
+/**
+ * Validates and normalizes an expiry input for write paths (POST creates and
+ * the PATCH resolvers share this single gate; pure function).
+ *
+ * - `undefined` / `null` / `""` → `{ ok: true, value: null }` (permanent).
+ *   POST treats those identically (nothing to keep — there is no existing
+ *   row); PATCH distinguishes `undefined` (keep) upstream, before calling.
+ * - a string that parses to a finite timestamp strictly later than now →
+ *   normalized to ISO-8601 UTC (`toISOString()`), the storage invariant
+ *   shared with `created_at`.
+ * - anything else (past dates, unparseable strings, non-strings) →
+ *   `invalid_expires_at` — never a silent fallback.
+ */
+export function resolveExpiresAtValue(
+	raw: unknown,
+):
+	| { ok: true; value: string | null }
+	| { ok: false; error: "invalid_expires_at" } {
+	if (raw === null || raw === undefined || raw === "") {
+		return { ok: true, value: null };
+	}
+	const ms = typeof raw === "string" ? new Date(raw).getTime() : Number.NaN;
+	if (!Number.isFinite(ms) || ms <= Date.now()) {
+		return { ok: false, error: "invalid_expires_at" };
+	}
+	return { ok: true, value: new Date(ms).toISOString() };
+}
 
 /**
  * Resolves a PATCH payload against an existing token row (pure function).
@@ -121,6 +152,18 @@ export function resolveTokenUpdate(
 		allowedModels = serialized.value;
 	}
 
+	let expiresAt = existing.expires_at;
+	const rawExpiresAt = input.expires_at;
+	if (rawExpiresAt !== undefined) {
+		// Three-state: undefined keeps; null / "" clears back to permanent;
+		// a value must be a future ISO-8601 timestamp (normalized on write)
+		const resolvedExpiry = resolveExpiresAtValue(rawExpiresAt);
+		if (!resolvedExpiry.ok) {
+			return { ok: false, error: resolvedExpiry.error };
+		}
+		expiresAt = resolvedExpiry.value;
+	}
+
 	return {
 		ok: true,
 		values: {
@@ -130,6 +173,7 @@ export function resolveTokenUpdate(
 			status,
 			allowed_channels: allowedChannels,
 			allowed_models: allowedModels,
+			expires_at: expiresAt,
 		},
 	};
 }
@@ -142,6 +186,7 @@ export type UserExistingToken = {
 	name: string;
 	status: string;
 	allowed_models: string | null;
+	expires_at: string | null;
 };
 
 /** Final column values to write back after a successful user-side update. */
@@ -152,7 +197,8 @@ export type UserTokenUpdateError =
 	| "missing_body"
 	| "invalid_name"
 	| "invalid_status"
-	| "invalid_allowed_models";
+	| "invalid_allowed_models"
+	| "invalid_expires_at";
 
 export type UserTokenUpdateResult =
 	| { ok: true; values: UserTokenUpdateValues }
@@ -213,12 +259,25 @@ export function resolveUserTokenUpdate(
 		allowedModels = serialized.value;
 	}
 
+	let expiresAt = existing.expires_at;
+	const rawExpiresAt = input.expires_at;
+	if (rawExpiresAt !== undefined) {
+		// Three-state semantics identical to the admin resolver (undefined
+		// keeps; null / "" clears back to permanent; future ISO value sets)
+		const resolvedExpiry = resolveExpiresAtValue(rawExpiresAt);
+		if (!resolvedExpiry.ok) {
+			return { ok: false, error: resolvedExpiry.error };
+		}
+		expiresAt = resolvedExpiry.value;
+	}
+
 	return {
 		ok: true,
 		values: {
 			name,
 			status,
 			allowed_models: allowedModels,
+			expires_at: expiresAt,
 		},
 	};
 }

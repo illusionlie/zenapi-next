@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
-import { resolveTokenUpdate } from "../services/token-update";
+import {
+	resolveExpiresAtValue,
+	resolveTokenUpdate,
+} from "../services/token-update";
 import { generateToken, sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { parseAllowlist, serializeAllowlist } from "../utils/model-allowlist";
@@ -17,6 +20,7 @@ type TokenRow = {
 	status: string;
 	allowed_channels: string | null;
 	allowed_models: string | null;
+	expires_at: string | null;
 	token_plain?: string | null;
 };
 
@@ -25,7 +29,7 @@ type TokenRow = {
  */
 tokens.get("/", async (c) => {
 	const result = await c.env.DB.prepare(
-		"SELECT tokens.id, tokens.name, tokens.key_prefix, tokens.quota_total, tokens.quota_used, tokens.status, tokens.allowed_channels, tokens.allowed_models, tokens.user_id, tokens.created_at, tokens.updated_at, users.name as user_name, users.email as user_email FROM tokens LEFT JOIN users ON users.id = tokens.user_id ORDER BY tokens.created_at DESC",
+		"SELECT tokens.id, tokens.name, tokens.key_prefix, tokens.quota_total, tokens.quota_used, tokens.status, tokens.allowed_channels, tokens.allowed_models, tokens.expires_at, tokens.user_id, tokens.created_at, tokens.updated_at, users.name as user_name, users.email as user_email FROM tokens LEFT JOIN users ON users.id = tokens.user_id ORDER BY tokens.created_at DESC",
 	).all();
 	const rows = (result.results ?? []) as (TokenRow & {
 		user_id: string | null;
@@ -72,6 +76,13 @@ tokens.post("/", async (c) => {
 		);
 	}
 
+	// Optional expiry: missing/null/"" → permanent; must otherwise be a future
+	// ISO-8601 timestamp (normalized on write)
+	const expiresAt = resolveExpiresAtValue(body.expires_at);
+	if (!expiresAt.ok) {
+		return jsonError(c, 400, expiresAt.error, expiresAt.error);
+	}
+
 	// Missing/null allowed_channels stores a SQL NULL (not the literal "null"
 	// string); only newly created tokens are affected
 	const allowedChannels =
@@ -80,7 +91,7 @@ tokens.post("/", async (c) => {
 			: JSON.stringify(body.allowed_channels);
 
 	await c.env.DB.prepare(
-		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	)
 		.bind(
 			id,
@@ -93,6 +104,7 @@ tokens.post("/", async (c) => {
 			body.status ?? "active",
 			allowedChannels,
 			allowedModels.value,
+			expiresAt.value,
 			now,
 			now,
 		)
@@ -127,7 +139,7 @@ tokens.patch("/:id", async (c) => {
 	const values = resolved.values;
 
 	await c.env.DB.prepare(
-		"UPDATE tokens SET name = ?, quota_total = ?, quota_used = ?, status = ?, allowed_channels = ?, allowed_models = ?, updated_at = ? WHERE id = ?",
+		"UPDATE tokens SET name = ?, quota_total = ?, quota_used = ?, status = ?, allowed_channels = ?, allowed_models = ?, expires_at = ?, updated_at = ? WHERE id = ?",
 	)
 		.bind(
 			values.name,
@@ -136,6 +148,7 @@ tokens.patch("/:id", async (c) => {
 			values.status,
 			values.allowed_channels,
 			values.allowed_models,
+			values.expires_at,
 			nowIso(),
 			id,
 		)

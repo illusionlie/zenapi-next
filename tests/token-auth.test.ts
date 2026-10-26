@@ -26,6 +26,7 @@ function joinRow(overrides: Record<string, unknown> = {}) {
 		status: "active",
 		allowed_channels: null,
 		allowed_models: null,
+		expires_at: null,
 		user_id: null,
 		user_balance: null,
 		user_status: null,
@@ -122,6 +123,8 @@ describe("tokenAuth - single JOIN query", () => {
 		// exist on both sides of the join).
 		expect(sql).toContain("t.status");
 		expect(sql).toContain("t.allowed_models");
+		// Expiry column is part of the single round trip (no lazy second query)
+		expect(sql).toContain("t.expires_at");
 		expect(sql).not.toContain("SELECT *");
 		expect(sql).toContain("WHERE t.key_hash = ?");
 	});
@@ -261,5 +264,89 @@ describe("tokenAuth - unchanged gates", () => {
 		expect(((await res?.json()) as Record<string, unknown>).code).toBe(
 			"quota_exceeded",
 		);
+	});
+});
+
+describe("tokenAuth - lazy expiry gate (10-26-token-expiry)", () => {
+	// 相对真实 now 构造的 ISO,1h 余量远离执行耗时敏感边界
+	const pastIso = () => new Date(Date.now() - 3600_000).toISOString();
+	const futureIso = () => new Date(Date.now() + 3600_000).toISOString();
+
+	it("expired token (past expires_at) → 403 token_expired, row untouched", async () => {
+		const { res, prepareCalls } = await runAuth(
+			makeDb(joinRow({ expires_at: pastIso() })),
+		);
+		expect(res?.status).toBe(403);
+		expect(((await res?.json()) as Record<string, unknown>).code).toBe(
+			"token_expired",
+		);
+		// 惰性判定:拒绝仍是单次查询,无任何状态翻写语句
+		expect(prepareCalls).toHaveLength(1);
+	});
+
+	it("future expires_at → passes and flows into tokenRecord", async () => {
+		const expiresAt = futureIso();
+		const { res, tokenRecord } = await runAuth(
+			makeDb(joinRow({ expires_at: expiresAt })),
+		);
+		expect(res).toBeNull();
+		expect(tokenRecord?.expires_at).toBe(expiresAt);
+	});
+
+	it("NULL expires_at (legacy rows) → passes unchanged", async () => {
+		const { res, tokenRecord } = await runAuth(makeDb(joinRow()));
+		expect(res).toBeNull();
+		expect(tokenRecord?.expires_at).toBeNull();
+	});
+
+	it("unparseable stored expires_at → fail-open (treated as permanent)", async () => {
+		const { res } = await runAuth(
+			makeDb(joinRow({ expires_at: "not-a-timestamp" })),
+		);
+		expect(res).toBeNull();
+	});
+
+	it("expiry gate sits between status and quota: expired + exhausted quota → token_expired", async () => {
+		const { res } = await runAuth(
+			makeDb(
+				joinRow({
+					expires_at: pastIso(),
+					quota_total: 5,
+					quota_used: 5,
+				}),
+			),
+		);
+		expect(res?.status).toBe(403);
+		expect(((await res?.json()) as Record<string, unknown>).code).toBe(
+			"token_expired",
+		);
+	});
+
+	it("disabled status still wins over expiry (intent state first)", async () => {
+		const { res } = await runAuth(
+			makeDb(
+				joinRow({
+					status: "disabled",
+					expires_at: pastIso(),
+				}),
+			),
+		);
+		expect(res?.status).toBe(403);
+		expect(((await res?.json()) as Record<string, unknown>).code).toBe(
+			"token_disabled",
+		);
+	});
+
+	it("renewal path: a formerly expired value in the future passes (PATCH 续期分段)", async () => {
+		// 分段锁定「PATCH 把 expires_at 改到未来 → 同令牌立即可用」的鉴权半段:
+		// 同一列值从 pastIso 换成 futureIso 后网关放行
+		const expiredRun = await runAuth(makeDb(joinRow({ expires_at: pastIso() })));
+		expect(expiredRun.res?.status).toBe(403);
+
+		const renewedRun = await runAuth(
+			makeDb(joinRow({ expires_at: futureIso() })),
+		);
+		expect(renewedRun.res).toBeNull();
+		expect(renewedRun.tokenRecord?.id).toBe("tok_1");
 	});
 });

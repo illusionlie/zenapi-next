@@ -10,7 +10,10 @@ import {
 	getLdcExchangeRate,
 	getLdcPaymentEnabled,
 } from "../services/settings";
-import { resolveUserTokenUpdate } from "../services/token-update";
+import {
+	resolveExpiresAtValue,
+	resolveUserTokenUpdate,
+} from "../services/token-update";
 import {
 	loadModelDailyTrends,
 	loadModelRequestStats,
@@ -222,7 +225,7 @@ userApi.get("/monitoring", async (c) => {
 userApi.get("/tokens", async (c) => {
 	const userId = c.get("userId") as string;
 	const result = await c.env.DB.prepare(
-		"SELECT id, name, key_prefix, quota_total, quota_used, status, allowed_channels, allowed_models, created_at, updated_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
+		"SELECT id, name, key_prefix, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, created_at, updated_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
 	)
 		.bind(userId)
 		.all();
@@ -235,6 +238,7 @@ userApi.get("/tokens", async (c) => {
 		status: string;
 		allowed_channels: string | null;
 		allowed_models: string | null;
+		expires_at: string | null;
 		created_at: string;
 		updated_at: string;
 	}>;
@@ -273,8 +277,15 @@ userApi.post("/tokens", async (c) => {
 		);
 	}
 
+	// Optional expiry: missing/null/"" → permanent; must otherwise be a future
+	// ISO-8601 timestamp (normalized on write) — same gate as the admin route
+	const expiresAt = resolveExpiresAtValue(body.expires_at);
+	if (!expiresAt.ok) {
+		return jsonError(c, 400, expiresAt.error, expiresAt.error);
+	}
+
 	await c.env.DB.prepare(
-		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO tokens (id, name, key_hash, key_prefix, token_plain, quota_total, quota_used, status, allowed_channels, allowed_models, expires_at, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	)
 		.bind(
 			id,
@@ -287,6 +298,7 @@ userApi.post("/tokens", async (c) => {
 			"active",
 			null,
 			allowedModels.value,
+			expiresAt.value,
 			userId,
 			now,
 			now,
@@ -318,7 +330,7 @@ userApi.patch("/tokens/:id", async (c) => {
 	}
 
 	const existing = await c.env.DB.prepare(
-		"SELECT id, name, status, allowed_models FROM tokens WHERE id = ? AND user_id = ?",
+		"SELECT id, name, status, allowed_models, expires_at FROM tokens WHERE id = ? AND user_id = ?",
 	)
 		.bind(tokenId, userId)
 		.first<{
@@ -326,6 +338,7 @@ userApi.patch("/tokens/:id", async (c) => {
 			name: string;
 			status: string;
 			allowed_models: string | null;
+			expires_at: string | null;
 		}>();
 
 	if (!existing) {
@@ -341,12 +354,13 @@ userApi.patch("/tokens/:id", async (c) => {
 	const values = resolved.values;
 
 	await c.env.DB.prepare(
-		"UPDATE tokens SET name = ?, status = ?, allowed_models = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+		"UPDATE tokens SET name = ?, status = ?, allowed_models = ?, expires_at = ?, updated_at = ? WHERE id = ? AND user_id = ?",
 	)
 		.bind(
 			values.name,
 			values.status,
 			values.allowed_models,
+			values.expires_at,
 			nowIso(),
 			tokenId,
 			userId,
