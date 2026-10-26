@@ -232,7 +232,7 @@ export async function saveChannelAliases(
  * keys come from request model names, so the coarse clear-all cap keeps a
  * hostile key space from bloating the isolate.
  */
-type ChannelAliasHit = {
+export type ChannelAliasHit = {
 	channel_id: string;
 	model_id: string;
 	alias_only: boolean;

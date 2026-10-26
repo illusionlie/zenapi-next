@@ -1,3 +1,4 @@
+import type { D1Database } from "@cloudflare/workers-types";
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { type TokenRecord, tokenAuth } from "../middleware/tokenAuth";
@@ -27,6 +28,7 @@ import {
 	openaiToAnthropicResponse,
 } from "../services/format-converter";
 import {
+	type ChannelAliasHit,
 	loadChannelAliasesByAlias,
 	loadChannelAliasOnlyMap,
 } from "../services/model-aliases";
@@ -34,6 +36,7 @@ import { calculateCost, getModelPrice } from "../services/pricing";
 import {
 	loadProxySettingsCached,
 	resolveProxyRetryConfig,
+	type SettingsRawMap,
 } from "../services/settings";
 import { aggregateUpstreamStream } from "../services/stream-aggregate";
 import { recordUsage } from "../services/usage";
@@ -61,6 +64,128 @@ import {
 import { channelSupportsModel, filterAllowedChannels } from "./proxy";
 
 const anthropicProxy = new Hono<AppEnv>();
+
+/**
+ * Hot-path read snapshot shared by the anthropic inbound endpoints
+ * (`/messages` and `/messages/count_tokens`): per-channel alias resolution,
+ * alias_only map, active channels and proxy runtime settings in a single
+ * parallel Promise.all (the only serial RTT stage after the auth JOIN).
+ * Channels / aliases ride the 10s TTL caches, settings the 30s raw cache.
+ */
+type AnthropicProxyHotState = {
+	channelAliasHitMap: Map<string, ChannelAliasHit>;
+	perChannelAliasOnlyMap: Map<string, Set<string>>;
+	activeChannels: ChannelRecord[];
+	proxySettings: SettingsRawMap;
+};
+
+async function loadAnthropicProxyHotState(
+	db: D1Database,
+	model: string | null,
+): Promise<AnthropicProxyHotState> {
+	const [
+		channelAliasHits,
+		perChannelAliasOnlyMap,
+		activeChannels,
+		proxySettings,
+	] = await Promise.all([
+		model ? loadChannelAliasesByAlias(db, model) : Promise.resolve([]),
+		loadChannelAliasOnlyMap(db),
+		getActiveChannelsCached(db),
+		loadProxySettingsCached(db),
+	]);
+	return {
+		channelAliasHitMap: new Map(channelAliasHits.map((h) => [h.channel_id, h])),
+		perChannelAliasOnlyMap,
+		activeChannels,
+		proxySettings,
+	};
+}
+
+/**
+ * Model governance + candidate selection shared by the anthropic inbound
+ * endpoints: `channel_name/model` routing syntax, token-allowed channel
+ * filter, per-channel alias hits and alias_only suppression. Returns the
+ * governance-qualified candidates BEFORE target-format routing
+ * (see routeAnthropicTargetFormats).
+ */
+function selectAnthropicInboundCandidates(
+	model: string | null,
+	tokenRecord: TokenRecord,
+	state: AnthropicProxyHotState,
+): {
+	targetChannel: ChannelRecord | null;
+	actualModel: string | null;
+	effectiveModel: string | null;
+	candidates: ChannelRecord[];
+} {
+	// Resolve channel/model routing syntax (uses original model name)
+	const { targetChannel, actualModel } = resolveChannelRoute(
+		model,
+		state.activeChannels,
+	);
+	const effectiveModel = targetChannel ? actualModel : model;
+
+	let candidates: ChannelRecord[];
+	if (targetChannel) {
+		candidates = [targetChannel];
+	} else {
+		const allowedChannels = filterAllowedChannels(
+			state.activeChannels,
+			tokenRecord,
+			model,
+		);
+		if (model) {
+			candidates = allowedChannels.filter((channel) => {
+				// Channel matched via per-channel alias → include
+				if (state.channelAliasHitMap.has(channel.id)) return true;
+				// Channel natively supports this model → include UNLESS alias_only
+				if (channelSupportsModel(channel, model)) {
+					const aliasOnlyModels = state.perChannelAliasOnlyMap.get(channel.id);
+					return !aliasOnlyModels?.has(model);
+				}
+				return false;
+			});
+		} else {
+			// No model specified — all channels qualify
+			candidates = allowedChannels;
+		}
+	}
+	return { targetChannel, actualModel, effectiveModel, candidates };
+}
+
+/**
+ * Routing matrix step (design.md §3): pick each candidate's target format for
+ * the anthropic inbound protocol. responses-declared-only channels are
+ * dropped (no responses→anthropic conversion); the target rides on a shallow
+ * copy (api_format overridden) so downstream format branches act on it.
+ */
+function routeAnthropicTargetFormats(
+	candidates: ChannelRecord[],
+): ChannelRecord[] {
+	return candidates.flatMap((ch) => {
+		const targetFormat = selectTargetFormat(parseApiFormats(ch), "anthropic");
+		return targetFormat ? [{ ...ch, api_format: targetFormat }] : [];
+	});
+}
+
+/**
+ * Local coarse estimate for count_tokens: input_tokens ≈
+ * ceil(serialized-request-length / 4). Deliberately rough (no tokenizer
+ * dependency) — count_tokens is a client-side context hint, never a billing
+ * input; a stable estimate beats a 404 for Claude Code's context management.
+ */
+function estimateCountTokensResponse(
+	parsedBody: Record<string, unknown> | null,
+	requestText: string,
+): Response {
+	const basis = parsedBody ? JSON.stringify(parsedBody) : requestText;
+	const inputTokens = Math.max(1, Math.ceil(basis.length / 4));
+	return new Response(JSON.stringify({ input_tokens: inputTokens }), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	});
+}
 
 /**
  * Anthropic Messages API compatible proxy handler.
@@ -95,23 +220,10 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	// Promise.all——鉴权 JOIN 之后只剩这一个串行 RTT 阶段。channels / 别名走
 	// 10s TTL 缓存、settings 只缓存 raw 读（30s）；头策略 fail-open 解析与
 	// 重试配置三级回退链（settings → env → 默认，含 clamp）从 raw map 纯解析，
-	// 每次照常执行。
-	const [
-		channelAliasHits,
-		perChannelAliasOnlyMap,
-		activeChannels,
-		proxySettings,
-	] = await Promise.all([
-		model ? loadChannelAliasesByAlias(c.env.DB, model) : Promise.resolve([]),
-		loadChannelAliasOnlyMap(c.env.DB),
-		getActiveChannelsCached(c.env.DB),
-		loadProxySettingsCached(c.env.DB),
-	]);
-	const channelAliasHitMap = new Map(
-		channelAliasHits.map((h) => [h.channel_id, h]),
-	);
-	const headerPolicy = parseHeaderPolicyFromRaw(proxySettings);
-	const retryConfig = resolveProxyRetryConfig(proxySettings, {
+	// 每次照常执行。与 /messages/count_tokens 共享 loadAnthropicProxyHotState。
+	const hotState = await loadAnthropicProxyHotState(c.env.DB, model);
+	const headerPolicy = parseHeaderPolicyFromRaw(hotState.proxySettings);
+	const retryConfig = resolveProxyRetryConfig(hotState.proxySettings, {
 		rounds: c.env.PROXY_RETRY_ROUNDS,
 		delayMs: c.env.PROXY_RETRY_DELAY_MS,
 	});
@@ -119,12 +231,13 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	// Convert Anthropic request -> OpenAI format for internal use
 	const openaiBody = parsedBody ? anthropicToOpenaiRequest(parsedBody) : null;
 
-	// Resolve channel/model routing syntax (uses original model name)
-	const { targetChannel, actualModel } = resolveChannelRoute(
-		model,
-		activeChannels,
-	);
-	const effectiveModel = targetChannel ? actualModel : model;
+	// Model governance + candidate selection shared with /messages/count_tokens
+	const {
+		targetChannel,
+		actualModel,
+		effectiveModel,
+		candidates: modelCandidates,
+	} = selectAnthropicInboundCandidates(model, tokenRecord, hotState);
 
 	// If channel routing matched, replace model in the request bodies
 	let effectiveRequestText = requestText;
@@ -136,33 +249,7 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 		}
 	}
 
-	let candidates: ChannelRecord[];
-	if (targetChannel) {
-		candidates = [targetChannel];
-	} else {
-		const allowedChannels = filterAllowedChannels(
-			activeChannels,
-			tokenRecord,
-			model,
-		);
-		if (model) {
-			candidates = allowedChannels.filter((channel) => {
-				// Channel matched via per-channel alias → include
-				if (channelAliasHitMap.has(channel.id)) return true;
-				// Channel natively supports this model → include UNLESS alias_only
-				if (channelSupportsModel(channel, model)) {
-					const aliasOnlyModels = perChannelAliasOnlyMap.get(channel.id);
-					return !aliasOnlyModels?.has(model);
-				}
-				return false;
-			});
-		} else {
-			// No model specified — all channels qualify
-			candidates = allowedChannels;
-		}
-	}
-
-	if (candidates.length === 0) {
+	if (modelCandidates.length === 0) {
 		if (model) {
 			return jsonError(
 				c,
@@ -180,10 +267,7 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	// channel declaring ["anthropic","openai"] targets its native anthropic
 	// format. The target rides on a shallow copy (api_format overridden) so
 	// the per-format branches below act on it unchanged.
-	candidates = candidates.flatMap((ch) => {
-		const targetFormat = selectTargetFormat(parseApiFormats(ch), "anthropic");
-		return targetFormat ? [{ ...ch, api_format: targetFormat }] : [];
-	});
+	let candidates = routeAnthropicTargetFormats(modelCandidates);
 	if (candidates.length === 0) {
 		return jsonError(c, 503, "no_available_channels", "no_available_channels");
 	}
@@ -243,7 +327,7 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 			let channelModelName = effectiveModel;
 			if (!targetChannel && parsedBody) {
 				// Check if this channel was matched via per-channel alias
-				const aliasHit = channelAliasHitMap.get(channel.id);
+				const aliasHit = hotState.channelAliasHitMap.get(channel.id);
 				if (aliasHit) {
 					channelModelName = aliasHit.model_id;
 					const channelParsedBody = { ...parsedBody, model: channelModelName };
@@ -694,6 +778,139 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	}
 
 	return lastResponse;
+});
+
+/**
+ * POST /messages/count_tokens — Anthropic token counting endpoint (Claude Code
+ * calls this frequently for context management; previously a 404).
+ *
+ * Semantics (task 10-26-count-tokens-endpoint):
+ * - Model governance identical to /messages: token/user allowlists,
+ *   `channel/model` routing syntax, per-channel alias resolution, unknown
+ *   model 404 — shared helpers guarantee the same chain.
+ * - anthropic-target channel: single upstream probe to
+ *   `{resolveEndpointBaseUrl(channel,"anthropic")}/v1/messages/count_tokens`,
+ *   response passed through untouched. No retries and no channel failover —
+ *   on any failure (network error / non-2xx) degrade to the local estimate.
+ * - Non-anthropic targets (openai/responses/custom): no upstream request at
+ *   all, local coarse estimate (estimateCountTokensResponse).
+ * - Zero-cost discipline (R5): no usage_logs writes, no quota/balance
+ *   mutation, no cooldown accounting — tokenAuth's existing precheck is the
+ *   only billing-adjacent gate.
+ */
+anthropicProxy.post("/messages/count_tokens", tokenAuth, async (c) => {
+	const tokenRecord = c.get("tokenRecord") as TokenRecord;
+	const requestText = await c.req.text();
+	const parsedBody = requestText
+		? safeJsonParse<Record<string, unknown> | null>(requestText, null)
+		: null;
+	const model =
+		parsedBody?.model !== undefined && parsedBody?.model !== null
+			? String(parsedBody.model)
+			: null;
+
+	// Token-level and user-level model allowlists — same gate as /messages:
+	// each list independently gates the requested model name (exact match,
+	// alias unresolved) before any channel routing work.
+	if (
+		!isModelAllowedByAll(
+			[tokenRecord.token_allowed_models, tokenRecord.user_allowed_models],
+			model,
+		)
+	) {
+		return jsonError(c, 403, "model_not_allowed", "model_not_allowed");
+	}
+
+	const hotState = await loadAnthropicProxyHotState(c.env.DB, model);
+	const {
+		targetChannel,
+		actualModel,
+		candidates: modelCandidates,
+	} = selectAnthropicInboundCandidates(model, tokenRecord, hotState);
+	if (modelCandidates.length === 0) {
+		if (model) {
+			return jsonError(
+				c,
+				404,
+				"model_not_found",
+				`The model '${model}' does not exist or is not available.`,
+			);
+		}
+		return jsonError(c, 503, "no_available_channels", "no_available_channels");
+	}
+	const routed = routeAnthropicTargetFormats(modelCandidates);
+	if (routed.length === 0) {
+		return jsonError(c, 503, "no_available_channels", "no_available_channels");
+	}
+
+	// Model rewrite chain mirrors /messages: `channel/model` routing syntax
+	// first, then the selected channel's per-channel alias hit (below).
+	let bodyToSend = requestText;
+	if (targetChannel && parsedBody && actualModel !== null) {
+		bodyToSend = JSON.stringify({ ...parsedBody, model: actualModel });
+	}
+
+	// Only anthropic-target channels get a real upstream count; everything
+	// else (openai/responses/custom target) estimates locally with zero
+	// upstream traffic. Cooldown applies at the same eligibility tier as
+	// /messages (fail-open when every candidate is cooling); count_tokens
+	// itself never records cooldown failures/successes.
+	const anthropicTargets = routed.filter(
+		(ch) => (ch.api_format ?? "openai") === "anthropic",
+	);
+	const nonCoolingIds = new Set(
+		filterCoolingChannels(anthropicTargets.map((ch) => ch.id)),
+	);
+	const pool = anthropicTargets.filter((ch) => nonCoolingIds.has(ch.id));
+	if (pool.length === 0) {
+		return estimateCountTokensResponse(parsedBody, requestText);
+	}
+	// Light query: one weighted pick, one attempt — no retry rounds (R5).
+	const channel = createWeightedOrder(pool)[0];
+	const aliasHit = hotState.channelAliasHitMap.get(channel.id);
+	if (!targetChannel && parsedBody && aliasHit) {
+		bodyToSend = JSON.stringify({ ...parsedBody, model: aliasHit.model_id });
+	}
+
+	const baseUrl = resolveEndpointBaseUrl(channel, "anthropic");
+	const target = cfSafeUrl(`${baseUrl}/v1/messages/count_tokens`);
+	const headers = new Headers();
+	const apiKey = shuffleArray(parseApiKeys(channel.api_key))[0] ?? "";
+	headers.set("x-api-key", String(apiKey));
+	headers.set(
+		"anthropic-version",
+		c.req.header("anthropic-version") ?? "2023-06-01",
+	);
+	headers.set("content-type", "application/json");
+	// Forward anthropic-beta like the /messages anthropic branch (counting
+	// semantics can differ per beta feature).
+	const betaHeader = c.req.header("anthropic-beta");
+	if (betaHeader) {
+		headers.set("anthropic-beta", betaHeader);
+	}
+	applyHeaderPolicy(
+		headers,
+		parseHeaderPolicyFromRaw(hotState.proxySettings),
+		channel.custom_headers_json,
+		channel.disguise_headers_json,
+	);
+
+	try {
+		const response = await fetch(target, {
+			method: "POST",
+			headers,
+			body: bodyToSend,
+		});
+		if (response.ok) {
+			// Upstream count passes through untouched ({input_tokens}); no
+			// usage recording, no quota mutation.
+			return response;
+		}
+	} catch {
+		// Network error — degrade to the local estimate below.
+	}
+	// Upstream non-2xx or network error: no retry, no channel failover.
+	return estimateCountTokensResponse(parsedBody, requestText);
 });
 
 export default anthropicProxy;

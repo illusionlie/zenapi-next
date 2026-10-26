@@ -96,7 +96,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 | `/api/u` | `routes/user-api.ts` | 用户仪表盘 / 模型 / 令牌（含模型白名单配置，额度字段拒改） / 日志 / 模型可用性监测 |
 | `/api/recharge` | `routes/recharge.ts` | 充值订单 |
 | `/v1` | `routes/proxy.ts` | OpenAI 兼容代理（见 §8） |
-| `/anthropic/v1` | `routes/anthropic-proxy.ts` | Anthropic Messages 代理（含格式互转） |
+| `/anthropic/v1` | `routes/anthropic-proxy.ts` | Anthropic Messages 代理（含格式互转与 `count_tokens`） |
 
 ## 7. 鉴权中间件
 
@@ -124,6 +124,7 @@ tests/                      # Vitest 单测（如 model-allowlist.test.ts、chan
 - **用量预聚合与维护**：`usage_stats_daily`（日粒度 model×channel×token×user，UTC 日切）承载往日统计；跨日窗口 = rollup 段（≤昨日）+ 当日 raw 段并集（`splitWindow` 两段严格不相交；**span ≤ 1 天的窗口走 raw-only 精确边界**，不吃日粒度近似——秒粒度判定，防止监测 1d/15m/1h 档整天虚高；>1 天窗口起点日按整天近似计入，误差 ≤ 1/窗口天数）。Cron `03:17 UTC`（wrangler.toml `[triggers]`）每日执行：**近 7 天 rollup 自愈扫窗**（逐日索引探测、缺才补，单晚失败不再黑洞）→ 分批 retention 清理原始日志（chunk 5000 × 至多 180 轮保险丝，最坏全链 ~219 条查询 ≪ D1 1000/调用上限）→ 清理过期 sessions → rollup 表 180d 保留期清理，单步失败不阻断。手动端点：`POST /api/dashboard/rollup`（单日 / 空体全量缺失回填，`rollupMissingDates` 走 MIN+DISTINCT 差集无全表扫）、`POST /api/usage/prune`（有界，响应 `{deleted, complete}`，complete=false 重跑续删）；cutoff 统一 `retentionCutoffIso`（UTC 毫秒）。**防丢守卫**：`rollupDate` 对「原始行已清且 rollup 行存在」的日期 no-op，永不把幸存统计删空。
 - **渠道冷却与请求日志开关**：渠道**时间聚类**的连续 3 次可重试失败（408/429/5xx/网络错误，每渠道每请求至多记 1 次，成功即清零；间隔超 `COOLDOWN_STREAK_RESET_MS`=5 分钟则 streak 重置——非 isolate 生命周期累计）进入 60s 冷却（`services/channel-cooldown.ts`，isolate 内存视图、多 isolate 不共享），期间不进加权随机候选池；**fail-open**：全部候选都在冷却中时不过滤，永不因冷却提前 503。入口请求日志中间件默认不解析请求体（`[request]` 仅 method/path），settings `debug_request_body_log=true`（三级回退 + 30s 缓存；管理台 GET 走 `loadDebugLogFlagDirect` 直读不受缓存陈旧影响，UI 开关未做、可经 API 设置）恢复完整 body 解析形态（一次 `text()` 后自行 `JSON.parse`：非 JSON body 记 `text` + 真实 `body_size`）。
 - usage 解析兼容 Responses 格式：SSE `response.completed` 事件的 `response.usage` 路径；`input_tokens/output_tokens` 归一为 prompt/completion tokens。
+- **count_tokens 端点**：`POST /anthropic/v1/messages/count_tokens`（tokenAuth，Claude Code 上下文管理依赖）。模型治理与 `/messages` 同链——经 `anthropic-proxy.ts` 内共享 helper（热态读取 `loadAnthropicProxyHotState`、候选选择 `selectAnthropicInboundCandidates`、目标格式路由 `routeAnthropicTargetFormats`）复用 `channel/model` 路由语法、per-channel 别名、令牌/用户白名单与 alias_only 抑制（**不**解析全局 `model_aliases`，与 `/messages` 现行热路径一致）；anthropic 目标渠道单次加权挑选后透传 `{anthropic 端点}/v1/messages/count_tokens`（头按 anthropic 分支惯例 + `applyHeaderPolicy`，不接客户端预设/伪装提示词——注入会改变计数本身），上游失败（网络错/非 2xx）或目标为 openai/responses/custom 时不重试不换渠道，本地粗估 `input_tokens = max(1, ceil(序列化长度/4))` 恒 200；**零计费**：不写 usage_logs、不动额度与冷却（tokenAuth 预检照常）。
 - **禁用的模型不参与路由匹配**，也不出现在 `/v1/models`。
 - **用户级可用模型白名单**：`users.allowed_models`（JSON 数组，空 = 不限制）；按请求模型名**精确匹配**，白名单外返回 403 `model_not_allowed`；`/v1/models` 与 `/api/u/models` 同步过滤；与令牌级 `allowed_channels` 相互独立、正交生效。
 - **令牌级可用模型白名单**：`tokens.allowed_models`（JSON 数组，NULL/空 = 不限制），管理台与用户端均可配置；与用户级白名单**取交集生效**（逐清单独立校验后 AND，不合并数组，避免空交集 fail-open 反转），精确匹配、白名单外 403 `model_not_allowed`；`/v1/models` 同步双重过滤；与令牌级 `allowed_channels` 正交。
