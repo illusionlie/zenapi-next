@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/directory-structure.md", "reason": "挂载点与路由薄壳规范，新端点须挂在 anthropic-proxy"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "selectTargetFormat/resolveEndpointBaseUrl 契约，count_tokens 透传 URL 解析依据"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "jsonError 形态与 snake_case 错误码（token_expired/model_not_allowed 等新码遵循）"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "anthropic 请求形状与转换器契约（估算分支对 anthropic 形状 messages 计数）"}
