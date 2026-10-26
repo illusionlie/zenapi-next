@@ -39,11 +39,11 @@
 
 ## 跨子任务验收（父任务持有）
 
-- [ ] 每个子任务独立走完 Trellis 流程（artifact → start → 实现 → check → spec 更新 → commit → archive）。
-- [ ] 全部子任务归档后：`bun run check && bun run typecheck && bun run test` 全绿。
-- [ ] 涉及代理热路径的三个子任务（privacy-header-strip / rate-limiting / key-cooldown-stats）
-      互不回归对方行为；最后一个热路径子任务的 check 覆盖一轮全量回归。
-- [ ] AGENTS.md §8（代理关键行为）在相关子任务的 spec 更新环节同步补充新行为锚点。
+- [x] 每个子任务独立走完 Trellis 流程（artifact → start → 实现 → check → spec 更新 → commit → archive）。
+- [x] 全部子任务归档后：`bun run check && bun run typecheck && bun run test` 全绿（最终 916 用例，主会话逐任务亲跑门禁）。
+- [x] 涉及代理热路径的三个子任务（privacy-header-strip / rate-limiting / key-cooldown-stats）
+      互不回归对方行为；每个任务主会话亲跑全量门禁，最终轮 916 全绿覆盖全部热路径叠加。
+- [x] AGENTS.md §8（代理关键行为）已随各子任务补充新行为锚点（count_tokens / 隐私头剥离 / 客户端限流 / key 冷却 / 备份 / webhook 报警 / 主动探测）。
 
 ## 非目标
 
