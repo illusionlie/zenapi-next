@@ -21,10 +21,15 @@ import {
 	normalizeEndpointOverrides,
 	parseApiFormats,
 } from "../services/channel-types";
+// 校验规则集唯一实现（2026-10-26 自本文件原样抽取，配置备份导入共用）：
+// reason → message/code 映射与 disguise_preset 白名单判定，行为与抽取前一致
 import {
-	CLIENT_PRESET_IDS,
-	isStreamForcingPreset,
-} from "../services/client-presets";
+	invalidDisguisePresetError,
+	invalidFormatsError,
+	invalidOverridesError,
+	isValidDisguisePreset,
+} from "../services/channel-validation";
+import { isStreamForcingPreset } from "../services/client-presets";
 import { saveChannelAliases } from "../services/model-aliases";
 import {
 	buildModelTestRequestBody,
@@ -75,81 +80,6 @@ type ChannelPayload = {
 	disguise_preset?: string;
 	model_aliases?: Record<string, AliasConfig>;
 };
-
-/**
- * 校验失败时 400 响应的 message：说明具体原因（格式声明不可为空、不给
- * 「清除」态——null/[]/非法值一律 400，遵循 patch-update-semantics 的
- * 「非法值不静默回退」精神）。code 固定 invalid_api_formats（snake_case，
- * 与同文件既有错误码风格一致）。
- */
-const FORMAT_REASON_MESSAGES: Record<string, string> = {
-	not_array: "api_formats must be an array of format strings",
-	empty:
-		"api_formats cannot be empty or contain no valid format; omit the field to keep current values",
-	custom_exclusive: "custom format cannot be combined with other formats",
-};
-
-function invalidFormatsError(reason: string): {
-	message: string;
-	code: string;
-} {
-	return {
-		message: FORMAT_REASON_MESSAGES[reason] ?? "invalid_api_formats",
-		code: "invalid_api_formats",
-	};
-}
-
-/**
- * endpoint_overrides 校验失败时 400 响应的 message：说明具体原因并指出
- * 问题键（fail-fast，design D2——端点配置错配静默失效 = 请求打到错误
- * 上游）。code 固定 invalid_endpoint_overrides（snake_case，与同文件
- * 既有错误码风格一致）。
- */
-const OVERRIDE_REASON_MESSAGES: Record<string, string> = {
-	not_object:
-		"endpoint_overrides must be an object keyed by api format, or null to clear all",
-	unknown_key:
-		"endpoint_overrides keys must be within the {openai, responses, anthropic} whitelist",
-	custom_key:
-		"custom format cannot have an endpoint override (base_url is the full URL)",
-	undeclared_format:
-		"endpoint_overrides keys must be formats declared in api_formats",
-	invalid_url:
-		"endpoint_overrides values must be http(s) URL strings, or null/empty to clear",
-};
-
-function invalidOverridesError(
-	reason: string,
-	key?: string,
-): {
-	message: string;
-	code: string;
-} {
-	const base = OVERRIDE_REASON_MESSAGES[reason] ?? "invalid endpoint_overrides";
-	return {
-		message: key ? `${base} (key: ${key})` : base,
-		code: "invalid_endpoint_overrides",
-	};
-}
-
-/**
- * disguise_preset 白名单校验（服务端预设是封闭集合）：空 / NULL = 关闭放行，
- * 非空白值必须命中 CLIENT_PRESET_IDS，非法 400 invalid_disguise_preset
- * （snake_case，不静默回退）。POST trim-or-null 与 PATCH 三态（undefined
- * 保留 / 值含空串覆盖）由各端点先行归一，这里只判终值。
- */
-function isValidDisguisePreset(value: string | null): boolean {
-	return (
-		value === null || (CLIENT_PRESET_IDS as readonly string[]).includes(value)
-	);
-}
-
-function invalidDisguisePresetError(): { message: string; code: string } {
-	return {
-		message: `disguise_preset must be one of [${CLIENT_PRESET_IDS.join(", ")}], or empty to disable`,
-		code: "invalid_disguise_preset",
-	};
-}
 
 /**
  * 解析请求体声明的格式集：api_formats 优先，legacy 单值 api_format 映射

@@ -17,6 +17,7 @@ import {
 import { toast } from "./core/toast";
 import type {
 	AdminData,
+	BackupImportResult,
 	Channel,
 	ChannelEndpointOverrideKey,
 	ChannelForm,
@@ -1133,6 +1134,59 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 		}
 	}, [token]);
 
+	// 配置备份导出：下载 JSON（含渠道 API Key 明文，警示由 SettingsView 文案承担）
+	const handleBackupExport = useCallback(async () => {
+		try {
+			const res = await fetch("/api/backup/export", {
+				headers: { "x-admin-token": token },
+			});
+			if (!res.ok) {
+				const payload = (await res.json().catch(() => null)) as {
+					error?: string;
+				} | null;
+				throw new Error(payload?.error ?? `HTTP ${res.status}`);
+			}
+			const disposition = res.headers.get("content-disposition") ?? "";
+			const filename =
+				disposition.match(/filename="([^"]+)"/)?.[1] ??
+				`zenapi-backup-${new Date().toISOString().slice(0, 10)}.json`;
+			const blob = await res.blob();
+			const url = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = url;
+			anchor.download = filename;
+			anchor.click();
+			URL.revokeObjectURL(url);
+			toast.success("备份已导出（含 API Key 明文，请妥善保管）");
+		} catch (error) {
+			toast.error((error as Error).message);
+		}
+	}, [token]);
+
+	// 配置备份导入：POST JSON 文本（先清后写单事务），成功后刷新渠道缓存。
+	// 失败时 toast 后 rethrow，SettingsView 保留输入内容便于修正。
+	const handleBackupImport = useCallback(
+		async (payloadText: string) => {
+			try {
+				const result = await apiFetch<BackupImportResult>(
+					"/api/backup/import",
+					{
+						method: "POST",
+						body: payloadText,
+					},
+				);
+				toast.success(
+					`导入成功：渠道 ${result.imported.channels} 条、模型别名 ${result.imported.model_aliases} 条、渠道别名 ${result.imported.channel_model_aliases} 条、设置 ${result.imported.settings} 项（缓存最长 30 秒内生效）`,
+				);
+				await loadChannels().catch(() => null);
+			} catch (error) {
+				toast.error((error as Error).message);
+				throw error;
+			}
+		},
+		[apiFetch, loadChannels],
+	);
+
 	const handleUsageRefresh = useCallback(async () => {
 		try {
 			await loadUsage();
@@ -1396,6 +1450,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 					onGenerateCodes={handleGenerateCodes}
 					onDeleteCode={handleDeleteCode}
 					onExportCodes={handleExportCodes}
+					onExportBackup={handleBackupExport}
+					onImportBackup={handleBackupImport}
 				/>
 			);
 		}

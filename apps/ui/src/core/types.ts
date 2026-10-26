@@ -479,3 +479,15 @@ export type RechargeOrder = {
 	status: string;
 	created_at: string;
 };
+
+/** POST /api/backup/import 响应（配置全量替换结果 + 缓存陈旧窗口提示） */
+export type BackupImportResult = {
+	ok: boolean;
+	imported: {
+		channels: number;
+		model_aliases: number;
+		channel_model_aliases: number;
+		settings: number;
+	};
+	cache_staleness: { channels_seconds: number; settings_seconds: number };
+};

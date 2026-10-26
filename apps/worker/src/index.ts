@@ -6,6 +6,7 @@ import { adminAuth } from "./middleware/adminAuth";
 import adminUserRoutes from "./routes/admin-users";
 import anthropicProxyRoutes from "./routes/anthropic-proxy";
 import authRoutes from "./routes/auth";
+import backupRoutes from "./routes/backup";
 import channelRoutes from "./routes/channels";
 import dashboardRoutes from "./routes/dashboard";
 import inviteCodeRoutes from "./routes/invite-codes";
@@ -153,6 +154,7 @@ app.use("/api/*", async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true }));
 
 app.route("/api/auth", authRoutes);
+app.route("/api/backup", backupRoutes);
 app.route("/api/channels", channelRoutes);
 app.route("/api/models", modelRoutes);
 app.route("/api/model-aliases", modelAliasRoutes);

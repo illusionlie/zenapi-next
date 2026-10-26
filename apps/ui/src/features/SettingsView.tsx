@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "hono/jsx/dom";
+import { useEffect, useMemo, useRef, useState } from "hono/jsx/dom";
 import type { InviteCode, RegistrationMode, SettingsForm } from "../core/types";
 import { ToggleSwitch } from "./ToggleSwitch";
 
@@ -16,6 +16,8 @@ type SettingsViewProps = {
 	) => Promise<void>;
 	onDeleteCode: (id: string) => Promise<void>;
 	onExportCodes: () => Promise<void>;
+	onExportBackup: () => Promise<void>;
+	onImportBackup: (payloadText: string) => Promise<void>;
 };
 
 const registrationModeOptions: {
@@ -50,12 +52,16 @@ export const SettingsView = ({
 	onGenerateCodes,
 	onDeleteCode,
 	onExportCodes,
+	onExportBackup,
+	onImportBackup,
 }: SettingsViewProps) => {
 	const [genCount, setGenCount] = useState("10");
 	const [genMaxUses, setGenMaxUses] = useState("1");
 	const [genPrefix, setGenPrefix] = useState("ZEN-");
 	const announcementRef = useRef<HTMLTextAreaElement>(null);
 	const modelTestPromptRef = useRef<HTMLTextAreaElement>(null);
+	const [backupText, setBackupText] = useState("");
+	const [backupImporting, setBackupImporting] = useState(false);
 
 	// enabled toggle 门控：两把密钥（现值 + 未保存的输入）解析后任一为空则不可开启
 	const turnstileSiteKeyReady = settingsForm.turnstile_site_key.trim() !== "";
@@ -63,6 +69,98 @@ export const SettingsView = ({
 		turnstileSecretKeySet || settingsForm.turnstile_secret_key !== "";
 	const turnstileToggleDisabled =
 		!turnstileSiteKeyReady || !turnstileSecretReady;
+
+	// 备份导入预览：本地解析载荷结构并统计各表条数（提交前最后一步校验在
+	// 服务端，预览仅用于确认与双重确认文案）
+	type BackupPreview =
+		| {
+				ok: true;
+				channels: number;
+				modelAliases: number;
+				channelAliases: number;
+				settings: number;
+		  }
+		| { ok: false; error: string }
+		| null;
+	const backupPreview = useMemo<BackupPreview>(() => {
+		if (backupText.trim() === "") {
+			return null;
+		}
+		try {
+			const parsed = JSON.parse(backupText) as Record<string, unknown>;
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				Array.isArray(parsed)
+			) {
+				return { ok: false, error: "不是有效的备份 JSON 对象" };
+			}
+			if (parsed.version !== 1) {
+				return {
+					ok: false,
+					error: `不支持的备份版本：${String(parsed.version)}`,
+				};
+			}
+			const countArray = (value: unknown) =>
+				Array.isArray(value) ? value.length : 0;
+			const settings = parsed.settings;
+			return {
+				ok: true,
+				channels: countArray(parsed.channels),
+				modelAliases: countArray(parsed.model_aliases),
+				channelAliases: countArray(parsed.channel_model_aliases),
+				settings:
+					typeof settings === "object" && settings !== null
+						? Object.keys(settings).length
+						: 0,
+			};
+		} catch {
+			return { ok: false, error: "JSON 解析失败，请检查备份文件内容" };
+		}
+	}, [backupText]);
+
+	const handleBackupFileChange = async (file: File | undefined) => {
+		if (!file) {
+			return;
+		}
+		try {
+			setBackupText(await file.text());
+		} catch {
+			// 文件读取失败：清空预览，粘贴框作为兜底入口
+			setBackupText("");
+		}
+	};
+
+	const handleBackupImportClick = async () => {
+		if (!backupPreview?.ok || backupImporting) {
+			return;
+		}
+		// 双重确认（design §3：完全覆盖不可逆）
+		const first = window.confirm(
+			`导入将完全覆盖现有配置（渠道 / 别名 / 设置），且不可逆。\n\n` +
+				`载荷：渠道 ${backupPreview.channels} 条、模型别名 ${backupPreview.modelAliases} 条、` +
+				`渠道别名 ${backupPreview.channelAliases} 条、设置 ${backupPreview.settings} 项。\n\n确定继续？`,
+		);
+		if (!first) {
+			return;
+		}
+		const second = window.confirm(
+			"再次确认：此操作不可逆。建议先「导出当前配置」留存后再继续。确定导入？",
+		);
+		if (!second) {
+			return;
+		}
+		setBackupImporting(true);
+		try {
+			await onImportBackup(backupText);
+			// 成功才清空输入；失败保留内容便于修正（错误提示由上层 toast 承担）
+			setBackupText("");
+		} catch {
+			/* handled by caller toast */
+		} finally {
+			setBackupImporting(false);
+		}
+	};
 
 	useEffect(() => {
 		if (
@@ -724,6 +822,100 @@ export const SettingsView = ({
 						</button>
 					</div>
 				</form>
+			</div>
+			<div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
+				<div class="mb-4 flex items-center justify-between">
+					<h3 class="mb-0 font-['Space_Grotesk'] text-lg tracking-tight text-stone-900">
+						备份与恢复
+					</h3>
+					<button
+						type="button"
+						class="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-semibold text-white transition-shadow hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+						onClick={onExportBackup}
+					>
+						导出当前配置
+					</button>
+				</div>
+				<p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+					导出文件包含全部渠道配置与
+					<strong>API Key 明文</strong>
+					（不含用户 / 令牌 / 用量 / 充值数据，管理员密码哈希与 Turnstile
+					密钥已排除）。请妥善保管，避免泄露。
+				</p>
+				<div class="grid gap-3">
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="backup-file"
+						>
+							选择备份文件
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-stone-600 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="backup-file"
+							type="file"
+							accept="application/json,.json"
+							onInput={(event) => {
+								const input = event.currentTarget as HTMLInputElement | null;
+								const file = input?.files?.[0];
+								if (file) {
+									void handleBackupFileChange(file);
+								}
+							}}
+						/>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="backup-paste"
+						>
+							或粘贴备份 JSON
+						</label>
+						<textarea
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 font-mono text-xs text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="backup-paste"
+							rows={5}
+							placeholder='{"version":1,"exportedAt":"...","channels":[...]}'
+							value={backupText}
+							onInput={(event) => {
+								const target =
+									event.currentTarget as HTMLTextAreaElement | null;
+								setBackupText(target?.value ?? "");
+							}}
+						/>
+					</div>
+					{backupPreview && (
+						<div
+							class={`rounded-lg px-3 py-2 text-xs ${
+								backupPreview.ok
+									? "bg-stone-50 text-stone-600"
+									: "border border-red-200 bg-red-50 text-red-600"
+							}`}
+						>
+							{backupPreview.ok
+								? `将导入：渠道 ${backupPreview.channels} 条、模型别名 ${backupPreview.modelAliases} 条、渠道别名 ${backupPreview.channelAliases} 条、设置 ${backupPreview.settings} 项（导入后缓存最长 30 秒内生效）`
+								: backupPreview.error}
+						</div>
+					)}
+					<div>
+						<button
+							type="button"
+							class="h-10 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-[transform,box-shadow] duration-200 ease-smooth-out hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60"
+							disabled={!backupPreview?.ok || backupImporting}
+							onClick={() => {
+								void handleBackupImportClick();
+							}}
+						>
+							{backupImporting ? "导入中…" : "导入并完全覆盖现有配置"}
+						</button>
+						<p class="mt-1 text-xs text-stone-500">
+							导入为
+							<strong>全量替换</strong>
+							：先清空渠道 / 别名 /
+							载荷内设置再写入，失败整体回滚；用户、令牌、用量与充值数据不受影响。
+						</p>
+					</div>
+				</div>
 			</div>
 			{settingsForm.require_invite_code === "true" && (
 				<div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
