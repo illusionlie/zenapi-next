@@ -78,6 +78,7 @@ type ChannelPayload = {
 	disguise_headers?: string;
 	disguise_system_prompt?: string;
 	disguise_preset?: string;
+	probe_enabled?: unknown;
 	model_aliases?: Record<string, AliasConfig>;
 };
 
@@ -122,6 +123,21 @@ function normalizeChannelBaseUrl(
 		return normalizeBaseUrl(rawBaseUrl);
 	}
 	return String(rawBaseUrl).trim().replace(/\/+$/, "");
+}
+
+/**
+ * probe_enabled 严格布尔归一（写侧 fail-closed，与 settings 严格布尔键约定
+ * 一致）：仅接受 true/false 布尔或 "true"/"false" 字符串；其余返回 null
+ * （调用方回 400 invalid_probe_enabled，不静默转换 1/0、"yes" 等真值）。
+ */
+function parseProbeEnabled(raw: unknown): boolean | null {
+	if (raw === true || raw === "true") {
+		return true;
+	}
+	if (raw === false || raw === "false") {
+		return false;
+	}
+	return null;
 }
 
 /**
@@ -241,6 +257,20 @@ channels.post("/", async (c) => {
 		const error = invalidDisguisePresetError();
 		return jsonError(c, 400, error.message, error.code);
 	}
+	// 主动探测开关：POST 无 DB 现值，缺省 = 0（默认关）；提供时严格布尔归一
+	let probeEnabled = 0;
+	if (body.probe_enabled !== undefined) {
+		const parsed = parseProbeEnabled(body.probe_enabled);
+		if (parsed === null) {
+			return jsonError(
+				c,
+				400,
+				"invalid_probe_enabled",
+				"invalid_probe_enabled",
+			);
+		}
+		probeEnabled = parsed ? 1 : 0;
+	}
 
 	await insertChannel(c.env.DB, {
 		id,
@@ -261,6 +291,7 @@ channels.post("/", async (c) => {
 		disguise_headers_json: disguiseHeadersJson,
 		disguise_system_prompt: disguiseSystemPrompt,
 		disguise_preset: disguisePreset,
+		probe_enabled: probeEnabled,
 		created_at: now,
 		updated_at: now,
 	});
@@ -351,6 +382,21 @@ channels.patch("/:id", async (c) => {
 		const error = invalidDisguisePresetError();
 		return jsonError(c, 400, error.message, error.code);
 	}
+	// 主动探测开关：PUT 语义与 status 同类（非三态，缺省保留现值）；提供时
+	// 严格布尔归一，非法 400。last_probe_at 不在 UPDATE 列清单，天然保留。
+	let probeEnabled = (current.probe_enabled ?? 0) === 1;
+	if (body.probe_enabled !== undefined) {
+		const parsed = parseProbeEnabled(body.probe_enabled);
+		if (parsed === null) {
+			return jsonError(
+				c,
+				400,
+				"invalid_probe_enabled",
+				"invalid_probe_enabled",
+			);
+		}
+		probeEnabled = parsed;
+	}
 	const baseUrl = normalizeChannelBaseUrl(
 		apiFormats,
 		String(body.base_url ?? current.base_url),
@@ -374,6 +420,7 @@ channels.patch("/:id", async (c) => {
 		disguise_headers_json: disguiseHeadersJson,
 		disguise_system_prompt: disguiseSystemPrompt,
 		disguise_preset: disguisePreset,
+		probe_enabled: probeEnabled ? 1 : 0,
 		updated_at: nowIso(),
 	});
 

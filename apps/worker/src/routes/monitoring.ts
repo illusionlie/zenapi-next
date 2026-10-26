@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { PROBE_RETENTION_DAYS } from "../services/channel-probe";
 import { getKeyStatsSnapshot } from "../services/key-cooldown";
 import {
 	loadChannelDailyTrends,
@@ -221,6 +222,60 @@ monitoring.get("/", async (c) => {
 		),
 	}));
 
+	// Channel probe history (task 10-26-channel-probe, display-only): one
+	// window query over the retention horizon (checked_at index), grouped in
+	// memory per channel — rows arrive newest-first, so the first 14 per group
+	// are the most recent probes; no window functions (tiny volume). Channels
+	// without probe rows are simply absent (probe feature off → empty array,
+	// response shape unchanged); `latest` duplicates history[0] as the
+	// per-channel summary line.
+	type ProbeHistoryEntry = {
+		status: string;
+		checked_at: string;
+		latency_ms: number | null;
+	};
+	const PROBE_HISTORY_LIMIT = 14;
+	const probeCutoff = new Date(
+		now.getTime() - PROBE_RETENTION_DAYS * 24 * 60 * 60_000,
+	).toISOString();
+	const probeRows = await c.env.DB.prepare(
+		`SELECT channel_id, checked_at, status, latency_ms
+		FROM channel_probes
+		WHERE checked_at >= ?
+		ORDER BY checked_at DESC`,
+	)
+		.bind(probeCutoff)
+		.all<{
+			channel_id: string;
+			checked_at: string;
+			status: string;
+			latency_ms: number | null;
+		}>();
+	const probesByChannel = new Map<string, ProbeHistoryEntry[]>();
+	for (const row of probeRows.results ?? []) {
+		const channelId = String(row.channel_id);
+		const entry: ProbeHistoryEntry = {
+			status: String(row.status),
+			checked_at: String(row.checked_at),
+			latency_ms: row.latency_ms === null ? null : Number(row.latency_ms),
+		};
+		const history = probesByChannel.get(channelId);
+		if (history) {
+			if (history.length < PROBE_HISTORY_LIMIT) {
+				history.push(entry);
+			}
+		} else {
+			probesByChannel.set(channelId, [entry]);
+		}
+	}
+	const probes = [...probesByChannel.entries()].map(
+		([channel_id, history]) => ({
+			channel_id,
+			latest: history[0] ?? null,
+			history,
+		}),
+	);
+
 	return c.json({
 		summary: {
 			total_requests: totalRequests,
@@ -249,6 +304,7 @@ monitoring.get("/", async (c) => {
 		},
 		channels,
 		keyStats,
+		probes,
 		dailyTrends,
 		range,
 	});

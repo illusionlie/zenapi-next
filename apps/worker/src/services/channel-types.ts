@@ -29,6 +29,11 @@ export type ChannelRow = {
 	// 服务端客户端预设 ID（白名单 CLIENT_PRESET_IDS，services/client-presets.ts）；
 	// NULL/空 = 不启用（fail-open 关闭）
 	disguise_preset?: string | null;
+	// 主动健康探测渠道级开关（0/1，默认 0 = 关）；结果只展示、不参与路由
+	// 裁决（探测链零耦合冷却/路由，services/channel-probe.ts）
+	probe_enabled?: number | null;
+	// 末次探测 ISO 时间戳（NULL = 从未探测）；仅由探测调度器写，CRUD 不触碰
+	last_probe_at?: string | null;
 	stream_only?: number | null;
 	created_at?: string | null;
 	updated_at?: string | null;

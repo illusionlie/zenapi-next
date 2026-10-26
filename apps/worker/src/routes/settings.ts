@@ -22,12 +22,14 @@ import {
 	loadDailyReportFlagDirect,
 	loadDebugLogFlagDirect,
 	loadDeveloperNormalizeFlagDirect,
+	loadProbeIntervalMinutesDirect,
 	loadProxyRetryConfig,
 	loadRateLimitConfigDirect,
 	MAX_ALERT_FAILURE_RATE_PCT,
 	MAX_ALERT_MIN_SAMPLES,
 	MAX_ALERT_SILENCE_MINUTES,
 	MAX_ALERT_WINDOW_MINUTES,
+	MAX_PROBE_INTERVAL_MINUTES,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
 	MAX_RATE_LIMIT_VALUE,
@@ -35,6 +37,7 @@ import {
 	MIN_ALERT_MIN_SAMPLES,
 	MIN_ALERT_SILENCE_MINUTES,
 	MIN_ALERT_WINDOW_MINUTES,
+	MIN_PROBE_INTERVAL_MINUTES,
 	MIN_PROXY_RETRY_DELAY_MS,
 	MIN_PROXY_RETRY_ROUNDS,
 	MIN_RATE_LIMIT_VALUE,
@@ -57,6 +60,7 @@ import {
 	setLdcExchangeRate,
 	setLdcPaymentEnabled,
 	setModelTestPrompt,
+	setProbeIntervalMinutes,
 	setProxyExtraHeaders,
 	setProxyRemoveHeaders,
 	setProxyRetryDelayMs,
@@ -113,6 +117,8 @@ settings.get("/", async (c) => {
 	// 热路径，无缓存链；表单即真相）
 	const alertConfig = await loadAlertConfigDirect(c.env.DB);
 	const dailyReportEnabled = await loadDailyReportFlagDirect(c.env.DB);
+	// 主动探测间隔同契约：直读 clamp 后有效值（调度器走 */10 cron；0 = 总闸关闭）
+	const probeIntervalMinutes = await loadProbeIntervalMinutesDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -140,6 +146,7 @@ settings.get("/", async (c) => {
 		alert_silence_minutes: alertConfig.silenceMinutes,
 		alert_window_minutes: alertConfig.windowMinutes,
 		daily_report_enabled: dailyReportEnabled,
+		probe_interval_minutes: probeIntervalMinutes,
 		model_test_prompt: modelTestPrompt,
 		debug_request_body_log: debugRequestBodyLog,
 		normalize_developer_role: normalizeDeveloperRole,
@@ -459,6 +466,27 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setAlertWindowMinutes(c.env.DB, windowMinutes);
+		touched = true;
+	}
+
+	// 主动探测间隔：写侧严格整数 + 范围校验 [0, 1440]（读侧 clamp / 脏值降
+	// 默认 30 在 resolveProbeIntervalMinutes——两级形态，无 env 层）；0 = 总闸
+	// 关闭（渠道级开关全部失效），非法 400 invalid_probe_interval_minutes
+	if (body.probe_interval_minutes !== undefined) {
+		const interval = Number(body.probe_interval_minutes);
+		if (
+			!Number.isInteger(interval) ||
+			interval < MIN_PROBE_INTERVAL_MINUTES ||
+			interval > MAX_PROBE_INTERVAL_MINUTES
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_probe_interval_minutes",
+				"invalid_probe_interval_minutes",
+			);
+		}
+		await setProbeIntervalMinutes(c.env.DB, interval);
 		touched = true;
 	}
 

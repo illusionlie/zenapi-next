@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS channels (
   --   services/client-presets.ts CLIENT_PRESET_IDS）；NULL/空 = 不启用
   --   （迁移 0027 加列，无回填）。预设本体为代码常量，列只存指针。
   disguise_preset TEXT,
+  -- probe_enabled: 主动健康探测渠道级开关（默认 0 = 关；探测仅 GET /models，
+  --   结果只展示不参与路由裁决，迁移 0032 加列，无回填）。
+  probe_enabled INTEGER NOT NULL DEFAULT 0,
+  -- last_probe_at: 末次探测 ISO 时间戳（NULL = 从未探测，调度立即到期）；
+  --   仅由探测调度器（services/channel-probe.ts）写，渠道 CRUD 不触碰。
+  last_probe_at TEXT,
   stream_only INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -230,4 +236,19 @@ CREATE TABLE IF NOT EXISTS webhooks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- channel_probes: 渠道主动健康探测历史（*/10 cron 调度，services/
+--   channel-probe.ts；status ∈ healthy|degraded|down，detail 为逐格式结果
+--   JSON {format: "ok" | "err: 截断消息"}）。保留 7 天，03:17 cron 保留链尾
+--   清理（迁移 0032）。
+CREATE TABLE IF NOT EXISTS channel_probes (
+  channel_id TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  latency_ms INTEGER,
+  detail TEXT,
+  PRIMARY KEY (channel_id, checked_at)
+);
+
+CREATE INDEX IF NOT EXISTS channel_probes_checked_at ON channel_probes(checked_at);
 

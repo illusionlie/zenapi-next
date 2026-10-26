@@ -185,7 +185,8 @@ describe("PATCH /api/channels/:id — disguise_preset three-state", () => {
 		const update = updateRun(runs);
 		expect(update).toBeDefined();
 		expect(update?.args[UPDATE_PRESET_INDEX]).toBe("opencode_zen_v1");
-		expect(update?.args[19]).toBe("ch1");
+		// id 绑定下标随 probe_enabled 新列（第 19 参）后移一位
+		expect(update?.args[20]).toBe("ch1");
 	});
 
 	it("empty string clears the preset (NULL)", async () => {

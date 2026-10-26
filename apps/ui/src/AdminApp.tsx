@@ -509,6 +509,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				disguise_headers: channel.disguise_headers_json ?? "",
 				disguise_system_prompt: channel.disguise_system_prompt ?? "",
 				disguise_preset: channel.disguise_preset ?? "",
+				// D1 INTEGER 原样（0/1）；缺省/脏值一律视为关
+				probe_enabled: channel.probe_enabled === 1,
 				models: modelsList,
 			});
 			// Initialize alias state from per-channel alias map for this channel's models
@@ -603,6 +605,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 					// 服务端预设同构透传：空串 = 关闭预设（后端 trim-or-null），
 					// 白名单值 = 启用；与快照伪装头/提示词互斥由表单交互保证
 					disguise_preset: channelForm.disguise_preset.trim(),
+					// 恒传布尔（表单即真相）：后端严格布尔归一 0/1，缺省 = 保留现值
+					probe_enabled: channelForm.probe_enabled,
 					models: modelsArray.length > 0 ? modelsArray : undefined,
 					model_aliases:
 						Object.keys(aliasPayload).length > 0 ? aliasPayload : undefined,

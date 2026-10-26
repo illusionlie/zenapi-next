@@ -6,6 +6,7 @@ import type {
 	MonitoringData,
 	MonitoringErrorDetail,
 	MonitoringKeyStat,
+	MonitoringProbeEntry,
 	MonitoringSlotModel,
 } from "../core/types";
 import { parseChannelApiFormats } from "../core/utils";
@@ -49,6 +50,40 @@ const statusDot = (rate: number | null) => {
 	return "bg-red-500";
 };
 
+// —— 主动探测色条（任务 10-26-channel-probe）：配色与上行 uptime 条同源 ——
+const PROBE_STRIP_CELLS = 14;
+
+const probeColor = (status: MonitoringProbeEntry["status"]) => {
+	if (status === "healthy") return "#22c55e"; // green-500
+	if (status === "degraded") return "#eab308"; // yellow-500
+	return "#ef4444"; // red-500
+};
+const PROBE_NO_DATA_COLOR = "#e7e5e4"; // stone-200, 同 barColor(null)
+
+const probeStatusLabel = (status: MonitoringProbeEntry["status"]) => {
+	if (status === "healthy") return "正常";
+	if (status === "degraded") return "降级";
+	return "宕机";
+};
+
+/** 最近 14 格探测条数据：history 是最新在前，展示取旧→新、左侧灰格补齐。 */
+const buildProbeCells = (
+	history: MonitoringProbeEntry[],
+): Array<MonitoringProbeEntry | null> => {
+	const chronological = [...history].reverse();
+	const pad = PROBE_STRIP_CELLS - chronological.length;
+	if (pad > 0) {
+		return [...Array.from({ length: pad }, () => null), ...chronological];
+	}
+	return chronological.slice(-PROBE_STRIP_CELLS);
+};
+
+const probeCellTitle = (entry: MonitoringProbeEntry | null) => {
+	if (!entry) return "无探测数据";
+	const latency = entry.latency_ms !== null ? ` · ${entry.latency_ms}ms` : "";
+	return `${entry.checked_at} · ${probeStatusLabel(entry.status)}${latency}`;
+};
+
 type ChannelBarProps = {
 	channel: MonitoringChannelData;
 	slots: string[];
@@ -56,6 +91,7 @@ type ChannelBarProps = {
 	trendMap: Map<string, MonitoringDailyTrend>;
 	token: string;
 	keyStats?: MonitoringKeyStat[];
+	probeHistory?: MonitoringProbeEntry[];
 };
 
 const ChannelBar = ({
@@ -65,6 +101,7 @@ const ChannelBar = ({
 	trendMap,
 	token,
 	keyStats,
+	probeHistory,
 }: ChannelBarProps) => {
 	const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
 	const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -221,6 +258,37 @@ const ChannelBar = ({
 						</span>
 					) : (
 						<span class="text-stone-400"> &mdash; 无请求</span>
+					)}
+				</div>
+			)}
+
+			{/* 主动探测色条：14 格（旧→新，左灰补齐），悬停显示时间/状态/延迟；
+				仅对有探测记录的渠道渲染（未开启探测的渠道不占位） */}
+			{probeHistory && probeHistory.length > 0 && (
+				<div class="mt-2 flex items-center gap-2">
+					<span class="shrink-0 text-xs text-stone-400">主动探测</span>
+					<div class="flex flex-1 gap-px">
+						{buildProbeCells(probeHistory).map((entry, index) => (
+							<span
+								key={entry ? entry.checked_at : `empty-${index}`}
+								class="h-2 flex-1 rounded-sm"
+								style={{
+									backgroundColor: entry
+										? probeColor(entry.status)
+										: PROBE_NO_DATA_COLOR,
+								}}
+								title={probeCellTitle(entry)}
+							/>
+						))}
+					</div>
+					{probeHistory[0] && (
+						<span
+							class={`shrink-0 text-xs font-medium ${probeHistory[0].status === "healthy" ? "text-green-600" : probeHistory[0].status === "degraded" ? "text-yellow-600" : "text-red-600"}`}
+						>
+							{probeStatusLabel(probeHistory[0].status)}
+							{probeHistory[0].latency_ms !== null &&
+								` ${probeHistory[0].latency_ms}ms`}
+						</span>
 					)}
 				</div>
 			)}
@@ -464,6 +532,14 @@ export const MonitoringView = ({
 		return map;
 	}, [monitoring]);
 
+	const probeHistoryMap = useMemo(() => {
+		const map = new Map<string, MonitoringProbeEntry[]>();
+		for (const entry of monitoring?.probes ?? []) {
+			map.set(entry.channel_id, entry.history);
+		}
+		return map;
+	}, [monitoring]);
+
 	if (!monitoring) {
 		return (
 			<div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
@@ -580,6 +656,7 @@ export const MonitoringView = ({
 					trendMap={trendMap}
 					token={token}
 					keyStats={keyStatsMap.get(ch.channel_id)}
+					probeHistory={probeHistoryMap.get(ch.channel_id)}
 				/>
 			))}
 

@@ -184,6 +184,9 @@ export type ChannelInsertInput = {
 	disguise_system_prompt: string | null;
 	// 白名单校验由调用方完成（CLIENT_PRESET_IDS）；repo 只落列
 	disguise_preset: string | null;
+	// 主动探测开关（0/1）；last_probe_at 不在 INSERT/UPDATE 列清单——
+	// 建行落默认 NULL，后续仅由探测调度器写（services/channel-probe.ts）
+	probe_enabled: number;
 	created_at: string;
 	updated_at: string;
 };
@@ -195,7 +198,7 @@ export async function insertChannel(
 	const apiFormatColumns = toApiFormatColumns(input.api_formats);
 	await db
 		.prepare(
-			"INSERT INTO channels (id, name, base_url, api_key, weight, status, rate_limit, models_json, type, group_name, priority, metadata_json, api_format, api_formats, endpoint_overrides, custom_headers_json, disguise_headers_json, disguise_system_prompt, disguise_preset, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO channels (id, name, base_url, api_key, weight, status, rate_limit, models_json, type, group_name, priority, metadata_json, api_format, api_formats, endpoint_overrides, custom_headers_json, disguise_headers_json, disguise_system_prompt, disguise_preset, probe_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		)
 		.bind(
 			input.id,
@@ -217,6 +220,7 @@ export async function insertChannel(
 			input.disguise_headers_json,
 			input.disguise_system_prompt,
 			input.disguise_preset,
+			input.probe_enabled,
 			input.created_at,
 			input.updated_at,
 		)
@@ -243,6 +247,8 @@ export type ChannelUpdateInput = {
 	disguise_system_prompt: string | null;
 	// 白名单校验与三态语义（undefined 保留）由调用方解析后传入终值
 	disguise_preset: string | null;
+	// 主动探测开关（0/1）；last_probe_at 不在 UPDATE 列清单（仅调度器写）
+	probe_enabled: number;
 	updated_at: string;
 };
 
@@ -254,7 +260,7 @@ export async function updateChannel(
 	const apiFormatColumns = toApiFormatColumns(input.api_formats);
 	await db
 		.prepare(
-			"UPDATE channels SET name = ?, base_url = ?, api_key = ?, weight = ?, status = ?, rate_limit = ?, models_json = ?, type = ?, group_name = ?, priority = ?, metadata_json = ?, api_format = ?, api_formats = ?, endpoint_overrides = ?, custom_headers_json = ?, disguise_headers_json = ?, disguise_system_prompt = ?, disguise_preset = ?, updated_at = ? WHERE id = ?",
+			"UPDATE channels SET name = ?, base_url = ?, api_key = ?, weight = ?, status = ?, rate_limit = ?, models_json = ?, type = ?, group_name = ?, priority = ?, metadata_json = ?, api_format = ?, api_formats = ?, endpoint_overrides = ?, custom_headers_json = ?, disguise_headers_json = ?, disguise_system_prompt = ?, disguise_preset = ?, probe_enabled = ?, updated_at = ? WHERE id = ?",
 		)
 		.bind(
 			input.name,
@@ -275,6 +281,7 @@ export async function updateChannel(
 			input.disguise_headers_json,
 			input.disguise_system_prompt,
 			input.disguise_preset,
+			input.probe_enabled,
 			input.updated_at,
 			id,
 		)

@@ -22,6 +22,7 @@ import type {
 import { buildPageItems, parseChannelApiFormats } from "../core/utils";
 import type { ModelAliasesMap } from "../UserApp";
 import { Modal } from "./Modal";
+import { ToggleSwitch } from "./ToggleSwitch";
 
 type ParsedModel = {
 	id: string;
@@ -1062,6 +1063,33 @@ export const ChannelsView = ({
 								})
 							}
 						/>
+					</div>
+					{/* 主动探测开关：默认关（公益站/中转站禁测活）；探测仅 GET /models，
+						零 token 消耗，结果只展示、不参与路由裁决 */}
+					<div class="rounded-lg border border-stone-200 bg-stone-50 p-3">
+						<label
+							class="flex cursor-pointer items-center justify-between gap-3"
+							for="channel-probe-enabled"
+						>
+							<span class="min-w-0">
+								<span class="block text-xs font-medium uppercase tracking-widest text-stone-400">
+									主动探测
+								</span>
+								<span class="mt-0.5 block text-xs text-stone-400">
+									定时 GET /models 连通性探测，零 token
+									消耗；公益站/中转站请勿开启
+								</span>
+							</span>
+							<span class="shrink-0">
+								<ToggleSwitch
+									id="channel-probe-enabled"
+									checked={channelForm.probe_enabled}
+									onChange={(checked) =>
+										onFormChange({ probe_enabled: checked })
+									}
+								/>
+							</span>
+						</label>
 					</div>
 					<div>
 						<div class="mb-1.5 flex items-center justify-between gap-2">

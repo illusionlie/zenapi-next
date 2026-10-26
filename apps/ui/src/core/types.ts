@@ -21,6 +21,10 @@ export type Channel = {
 	disguise_system_prompt?: string | null;
 	/** 服务端客户端预设 ID（网关实时渲染指纹；NULL/空 = 不启用） */
 	disguise_preset?: string | null;
+	/** 主动健康探测开关（0/1，D1 INTEGER 原样；默认 0 = 关；结果只展示不参与路由） */
+	probe_enabled?: number | null;
+	/** 末次探测 ISO 时间戳（NULL = 从未探测；仅调度器写） */
+	last_probe_at?: string | null;
 };
 
 /** fetch_models / :id/test 响应中的逐格式探测结果 */
@@ -175,6 +179,20 @@ export type MonitoringChannelKeyStats = {
 	keys: MonitoringKeyStat[];
 };
 
+/** 监测页单条渠道主动探测记录（channel_probes 行的展示子集，任务 10-26-channel-probe）。 */
+export type MonitoringProbeEntry = {
+	status: "healthy" | "degraded" | "down";
+	checked_at: string;
+	latency_ms: number | null;
+};
+
+/** 每渠道探测历史（最近 14 条，latest = 最新一条摘要；后端可能未下发——旧 worker 兼容缺席）。 */
+export type MonitoringChannelProbes = {
+	channel_id: string;
+	latest: MonitoringProbeEntry | null;
+	history: MonitoringProbeEntry[];
+};
+
 export type MonitoringData = {
 	summary: {
 		total_requests: number;
@@ -195,6 +213,8 @@ export type MonitoringData = {
 	channels: MonitoringChannelData[];
 	/** 渠道多 Key 健康展开（后端可能未下发——旧 worker 兼容缺席） */
 	keyStats?: MonitoringChannelKeyStats[];
+	/** 渠道主动探测历史（探测关闭/旧 worker 兼容缺席） */
+	probes?: MonitoringChannelProbes[];
 	dailyTrends: MonitoringDailyTrend[];
 	range: string;
 };
@@ -277,6 +297,8 @@ export type Settings = {
 	alert_window_minutes: number;
 	/** 昨日用量日报推送开关(默认关) */
 	daily_report_enabled: boolean;
+	/** 渠道主动探测间隔分钟数(0 = 总闸关闭,默认 30) */
+	probe_interval_minutes?: number;
 	/** developer 角色透传归一化开关（默认关闭） */
 	normalize_developer_role: boolean;
 	model_test_prompt: string;
@@ -356,6 +378,8 @@ export type ChannelForm = {
 	disguise_system_prompt: string;
 	/** 服务端客户端预设 ID（网关实时渲染指纹；空串 = 无预设） */
 	disguise_preset: string;
+	/** 主动健康探测开关（默认关；定时 GET /models 零 token 探测） */
+	probe_enabled: boolean;
 	models: string;
 };
 

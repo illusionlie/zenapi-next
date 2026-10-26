@@ -816,6 +816,54 @@ export async function setAlertWindowMinutes(
 	await upsertSetting(db, ALERT_WINDOW_MINUTES_KEY, value.toString());
 }
 
+// Channel active health probe (the */10 cron scheduler in
+// services/channel-probe.ts consumes the interval; the per-channel
+// probe_enabled switch lives on the channels table, not here)
+
+export const PROBE_INTERVAL_MINUTES_KEY = "probe_interval_minutes";
+/** 0 = 全局总闸关闭（即使渠道开了探测也不跑） */
+export const MIN_PROBE_INTERVAL_MINUTES = 0;
+export const MAX_PROBE_INTERVAL_MINUTES = 1440;
+export const DEFAULT_PROBE_INTERVAL_MINUTES = 30;
+
+/**
+ * Pure resolver for the probe interval: two-level born-in-settings shape
+ * (same posture as the alert keys — no env tier, nothing was migrated).
+ * Missing / blank / non-integer input falls back to the 30-minute default;
+ * an in-range or out-of-range integer is clamped into [0, 1440] — 0 is a
+ * legal stored value (the global off switch), not dirt. Kept DB-free for
+ * direct unit testing.
+ */
+export function resolveProbeIntervalMinutes(raw: SettingsRawMap): number {
+	return parseBoundedAlertInt(
+		raw[PROBE_INTERVAL_MINUTES_KEY] ?? null,
+		MIN_PROBE_INTERVAL_MINUTES,
+		MAX_PROBE_INTERVAL_MINUTES,
+		DEFAULT_PROBE_INTERVAL_MINUTES,
+	);
+}
+
+/**
+ * Uncached read for the probe scheduler and the admin settings form ("admin
+ * form truth", same contract as loadAlertConfigDirect): the scheduler runs on
+ * the every-10-minutes cron, not per-request — no TTL cache needed.
+ */
+export async function loadProbeIntervalMinutesDirect(
+	db: D1Database,
+): Promise<number> {
+	const raw = await readSettingsRawMap(db, [PROBE_INTERVAL_MINUTES_KEY]);
+	return resolveProbeIntervalMinutes(raw);
+}
+
+/** Updates the probe interval setting (write-side strict integer; the PUT
+ * route validation rejects non-integers / out-of-range before this). */
+export async function setProbeIntervalMinutes(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, PROBE_INTERVAL_MINUTES_KEY, value.toString());
+}
+
 // Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
 // normalize flag + client rate limits ×2, cached read)
 

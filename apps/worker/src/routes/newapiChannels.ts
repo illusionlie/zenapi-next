@@ -302,6 +302,8 @@ newapi.post("/", async (c) => {
 		disguise_system_prompt: null,
 		// New API 兼容层不透传服务端预设（Out of Scope）：POST 固定 NULL
 		disguise_preset: null,
+		// New API 兼容层不透传主动探测开关（Out of Scope）：POST 固定默认关
+		probe_enabled: 0,
 		created_at: now,
 		updated_at: now,
 	});
@@ -360,6 +362,8 @@ newapi.put("/", async (c) => {
 		// New API 兼容层不透传服务端预设（Out of Scope）：PUT 保留现值，
 		// 不把管理台配置的预设抹成 NULL
 		disguise_preset: current.disguise_preset ?? null,
+		// New API 兼容层不透传主动探测开关（Out of Scope）：PUT 保留现值
+		probe_enabled: (current.probe_enabled ?? 0) === 1 ? 1 : 0,
 		updated_at: nowIso(),
 	});
 

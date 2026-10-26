@@ -1,5 +1,6 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { maybeSendDailyReport } from "./alerts";
+import { PROBE_RETENTION_DAYS, pruneChannelProbes } from "./channel-probe";
 import { getRetentionDays } from "./settings";
 
 /**
@@ -505,6 +506,22 @@ export async function runDailyMaintenance(
 		console.log("[retention] usage_stats_daily pruned", { pruned });
 	} catch (e) {
 		console.error("[retention] rollup prune failed", { error: String(e) });
+	}
+
+	// Channel probe history (7-day retention, task 10-26-channel-probe):
+	// grouped with the other retention prunes; the daily report below stays
+	// the chain-tail epilogue. Single small DELETE — an empty history (probe
+	// feature off) costs one no-op statement.
+	try {
+		const prunedProbes = await pruneChannelProbes(
+			db,
+			retentionCutoffIso(now, PROBE_RETENTION_DAYS),
+		);
+		console.log("[retention] channel_probes pruned", { pruned: prunedProbes });
+	} catch (e) {
+		console.error("[retention] channel_probes prune failed", {
+			error: String(e),
+		});
 	}
 
 	// Optional daily usage report (chain tail, fault-isolated like every step;
