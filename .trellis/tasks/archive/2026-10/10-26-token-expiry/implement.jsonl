@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "D1 迁移与 schema.sql 同步规范（新列 expires_at）"}
+{"file": ".trellis/spec/api-worker/backend/patch-update-semantics.md", "reason": "三态 PATCH 纯函数 resolver 模式，expires_at 编辑遵循"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "jsonError 形态与 snake_case 错误码（token_expired / invalid_expires_at）"}
