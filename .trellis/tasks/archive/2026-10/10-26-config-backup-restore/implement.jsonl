@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/directory-structure.md", "reason": "新路由挂载点与鉴权边界（/api/backup 不进放行清单）"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "api_formats/endpoint_overrides 校验语义（导入校验复用）"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "db.batch 事务与 D1 约束"}
