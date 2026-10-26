@@ -13,7 +13,9 @@ ZenAPI 目前没有任何客户端侧限流（tokenAuth 仅有额度 / 余额预
 ## Requirements
 
 - **R1 令牌级 RPM**：
-  - `tokens.rpm_limit INTEGER NULL`（迁移 + schema.sql；NULL = 不限）；
+  - `tokens.rpm_limit INTEGER NULL`（迁移 + schema.sql）；语义（修正于 design 阶段）：
+    **NULL = 跟随全局默认**（存量令牌零变化）、**正整数 = 每分钟上限**、
+    **0 = 显式不限（豁免全局默认）**；
   - settings 全局默认 `token_rpm_default`（整数，0 = 关闭，默认 0 即现网零行为变化）；
   - 实现：isolate 内存滑动窗（60 秒窗口，按 token id 计数，模块级 Map，照
     `channel-cooldown.ts` 范式）；超限 → 429 `rate_limit_exceeded` + `Retry-After` 头
@@ -32,17 +34,20 @@ ZenAPI 目前没有任何客户端侧限流（tokenAuth 仅有额度 / 余额预
 - **R4 计费纪律**：被限流请求不发上游、不写 usage_logs、不扣费（在 tokenAuth 通过后、
   渠道选择前的最早环节拦截）。
 - **R5 UI**：系统设置页两个默认值（token_rpm_default / ip_auth_fail_limit）；令牌编辑
-  表单（管理台 + 用户端）加 rpm_limit 字段（空 = 不限）。
-- **R6 测试**：超限 429 + Retry-After；NULL/0 不限；窗口滑动恢复；IP 节流触发后直接
-  429 且无 D1 查询（mock 断言）；成功请求不推进失败计数；默认配置下现网行为零变化。
+  表单（管理台 + 用户端）加 rpm_limit 字段（空 = 跟随全局默认、0 = 显式不限、
+  正整数 = 上限）。
+- **R6 测试**：超限 429 + Retry-After；NULL 令牌跟随全局默认、显式 0 豁免；窗口滑动
+  恢复；IP 节流触发后直接 429 且无 D1 查询（mock 断言）；成功请求不推进失败计数；
+  默认配置下现网行为零变化。
 
 ## Acceptance Criteria
 
 - [ ] rpm_limit=5 的令牌第 6 次/分钟请求 → 429 `rate_limit_exceeded` + Retry-After；
       下一分钟窗口恢复。
+- [ ] 全局默认 60 + rpm_limit NULL 的令牌按 60 生效；同配置下 rpm_limit=0 的令牌不受限。
 - [ ] 同 IP 连续 31 次无效令牌请求 → 第 31 次（阈值 +1）起 429 `auth_throttled`，
       D1 查询次数不再增长。
-- [ ] 全默认配置（两值皆 0/NULL）下所有既有测试零变化。
+- [ ] 全默认配置（两值皆 0、存量令牌全 NULL）下所有既有测试零变化。
 - [ ] settings 修改后 ≤30s 生效（走既有 settings 缓存链）。
 - [ ] `bun run check && bun run typecheck && bun run test` 全绿。
 

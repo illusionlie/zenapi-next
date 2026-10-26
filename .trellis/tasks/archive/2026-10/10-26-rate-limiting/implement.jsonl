@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "数值型 settings 契约（clamp 三层一致、读宽写严），两新键遵循"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "迁移与 schema.sql 同步规范"}
+{"file": ".trellis/spec/api-worker/backend/patch-update-semantics.md", "reason": "rpm_limit 三态 resolver 模式"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "错误码惯例（rate_limit_exceeded / auth_throttled / invalid_rpm_limit）"}
