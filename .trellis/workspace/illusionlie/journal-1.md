@@ -715,4 +715,4 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 
 ### Status
 
-[Continuing] 批次 4/8 完成（count_tokens / 隐私头 / 令牌过期 / 限流，均已提交归档），余 4 子任务排队（key-cooldown-stats 下一个）。限流任务两段式：首代理限额中断留 worker 侧半成品，续做代理审计采纳 + 补 settings.ts 断点（GET 未进响应体/PUT 无分支/未用 import）+ UI + 文档；PRD 曾有 rpm_limit NULL=不限 缺陷致全局默认对存量令牌失效，design 阶段修正为 NULL=跟随默认/0=显式豁免
+[Continuing] 批次 5/8 完成（+key-cooldown-stats），余 3 子任务排队（config-backup-restore 下一个）。key 冷却要点：401/403 由 break 改 continue 是有意的客户端可见行为变更（原单把失效 key 拖垮多 key 渠道）；408 归入 retryable 短冷却组（isRetryableStatus 集合整体处理）；既有断言零改动（存量测试渠道均单 key，循环语义等价）。限流任务两段式：首代理限额中断留 worker 侧半成品，续做代理审计采纳 + 补 settings.ts 断点（GET 未进响应体/PUT 无分支/未用 import）+ UI + 文档；PRD 曾有 rpm_limit NULL=不限 缺陷致全局默认对存量令牌失效，design 阶段修正为 NULL=跟随默认/0=显式豁免
