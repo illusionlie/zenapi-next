@@ -20,7 +20,9 @@ type NormalizedUsage = {
 };
 
 // services/usage.ts — usage_logs 两列：cached_input_tokens / cache_creation_tokens INTEGER 可空
-// 迁移 0024_usage_cache_tokens.sql；recordUsage INSERT 19 列，NULL 直通
+// 迁移 0024_usage_cache_tokens.sql；0030 起增 key_tag TEXT 可空（key 级末次归因 8 hex 指纹，
+// UsageInput.keyTag 透传，NULL = 旧行/无归因路径）
+// recordUsage INSERT 20 列，NULL 直通
 // 计费三写（INSERT + quota + balance）经单次 db.batch 原子执行，余额钳制不为负 → 见 §8
 ```
 
@@ -97,7 +99,7 @@ mergeRawUsage(acc, extractRawUsage(parsed)); // 非 null 覆盖
 ```ts
 // services/usage.ts
 type UsageInput = {
-	// ...既有 19 列字段不变
+	// ...既有 19 列字段不变（0030 起另有 keyTag?: string | null，key 级末次归因）
 	cost?: number | null;      // 与 INSERT 的 cost 列同值，复用不另设
 	userId?: string | null;    // 计费主体（users.id 为 TEXT 列）
 };

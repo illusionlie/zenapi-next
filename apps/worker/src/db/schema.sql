@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   status TEXT,
   error_code INTEGER,
   error_message TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- 0030: key 级末次归因（实际服务 / 末次尝试的 API key 指纹 8 hex；NULL = 旧行或无归因）
+  key_tag TEXT
 );
 
 CREATE INDEX IF NOT EXISTS usage_logs_created_at ON usage_logs(created_at);

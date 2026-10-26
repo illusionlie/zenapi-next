@@ -72,9 +72,11 @@ describe("recordUsage - billing batch assembly", () => {
 
 		const [insert, quota, balance] = stmts;
 
-		// usage-accounting.md 契约锚点：19 列 INSERT 不变，cost 同值落 usage_logs。
+		// usage-accounting.md 契约锚点：20 列 INSERT（0030 起含 key_tag），cost
+		// 同值落 usage_logs。
 		expect(insert.sql).toContain("INSERT INTO usage_logs");
-		expect(insert.sql.match(/\?/g)).toHaveLength(19);
+		expect(insert.sql.match(/\?/g)).toHaveLength(20);
+		expect(insert.sql).toContain("key_tag");
 		expect(insert.args).toContain(0.5);
 
 		expect(quota.sql).toContain(

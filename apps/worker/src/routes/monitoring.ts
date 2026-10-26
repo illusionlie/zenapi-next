@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { getKeyStatsSnapshot } from "../services/key-cooldown";
 import {
 	loadChannelDailyTrends,
 	loadChannelHealthRows,
@@ -128,6 +129,98 @@ monitoring.get("/", async (c) => {
 	const recentSuccess = Number(recentRow?.total_success ?? 0);
 	const recentErrors = Number(recentRow?.total_errors ?? 0);
 
+	// Per-key health (task 10-26-key-cooldown-stats, dual sources):
+	// (a) isolate-memory live values — current cooldown state plus cumulative
+	//     auth/retryable failure and success counters since isolate start
+	//     (getKeyStatsSnapshot, zero D1 writes; approximate across isolates);
+	// (b) durable last-attribution — usage_logs.key_tag ok/error counts over a
+	//     24h raw window (the key dimension is intentionally not rolled up;
+	//     the existing channel_id + created_at index selectivity suffices, no
+	//     key_tag index). One grouped query for all channels — same shape as
+	//     the per-channel GROUP BY key_tag, status probe in design §4b, minus
+	//     the N+1.
+	type MonitoringKeyStat = {
+		key_tag: string;
+		cooling: boolean;
+		cooling_until: number;
+		auth_fails: number;
+		retryable_fails: number;
+		successes: number;
+		last_failure_at: number;
+		last_success_at: number;
+		ok_24h: number;
+		error_24h: number;
+		success_rate_24h: number | null;
+	};
+	const keyCutoff = new Date(now.getTime() - 24 * 60 * 60_000)
+		.toISOString()
+		.slice(0, 19);
+	const keyTagRows = await c.env.DB.prepare(
+		`SELECT channel_id, key_tag,
+			SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count,
+			SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS error_count
+		FROM usage_logs
+		WHERE created_at >= ? AND key_tag IS NOT NULL
+		GROUP BY channel_id, key_tag`,
+	)
+		.bind(keyCutoff)
+		.all();
+
+	const keysByChannel = new Map<string, Map<string, MonitoringKeyStat>>();
+	const ensureKeyStat = (
+		channelId: string,
+		keyTag: string,
+	): MonitoringKeyStat => {
+		let byKey = keysByChannel.get(channelId);
+		if (!byKey) {
+			byKey = new Map();
+			keysByChannel.set(channelId, byKey);
+		}
+		let entry = byKey.get(keyTag);
+		if (!entry) {
+			entry = {
+				key_tag: keyTag,
+				cooling: false,
+				cooling_until: 0,
+				auth_fails: 0,
+				retryable_fails: 0,
+				successes: 0,
+				last_failure_at: 0,
+				last_success_at: 0,
+				ok_24h: 0,
+				error_24h: 0,
+				success_rate_24h: null,
+			};
+			byKey.set(keyTag, entry);
+		}
+		return entry;
+	};
+	for (const entry of getKeyStatsSnapshot().keys) {
+		Object.assign(ensureKeyStat(entry.channelId, entry.keyTag), {
+			cooling: entry.cooling,
+			cooling_until: entry.coolingUntil,
+			auth_fails: entry.authFails,
+			retryable_fails: entry.retryableFails,
+			successes: entry.successes,
+			last_failure_at: entry.lastFailureAt,
+			last_success_at: entry.lastSuccessAt,
+		});
+	}
+	for (const row of keyTagRows.results ?? []) {
+		const entry = ensureKeyStat(String(row.channel_id), String(row.key_tag));
+		entry.ok_24h = Number(row.ok_count);
+		entry.error_24h = Number(row.error_count);
+		const total24h = entry.ok_24h + entry.error_24h;
+		entry.success_rate_24h =
+			total24h > 0 ? Math.round((entry.ok_24h / total24h) * 10000) / 100 : null;
+	}
+	const keyStats = [...keysByChannel.entries()].map(([channel_id, byKey]) => ({
+		channel_id,
+		keys: [...byKey.values()].sort((a, b) =>
+			a.key_tag.localeCompare(b.key_tag),
+		),
+	}));
+
 	return c.json({
 		summary: {
 			total_requests: totalRequests,
@@ -155,6 +248,7 @@ monitoring.get("/", async (c) => {
 					: 100,
 		},
 		channels,
+		keyStats,
 		dailyTrends,
 		range,
 	});

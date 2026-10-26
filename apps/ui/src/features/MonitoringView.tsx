@@ -5,6 +5,7 @@ import type {
 	MonitoringDailyTrend,
 	MonitoringData,
 	MonitoringErrorDetail,
+	MonitoringKeyStat,
 	MonitoringSlotModel,
 } from "../core/types";
 import { parseChannelApiFormats } from "../core/utils";
@@ -54,6 +55,7 @@ type ChannelBarProps = {
 	range: string;
 	trendMap: Map<string, MonitoringDailyTrend>;
 	token: string;
+	keyStats?: MonitoringKeyStat[];
 };
 
 const ChannelBar = ({
@@ -62,12 +64,14 @@ const ChannelBar = ({
 	range,
 	trendMap,
 	token,
+	keyStats,
 }: ChannelBarProps) => {
 	const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
 	const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 	const [slotModels, setSlotModels] = useState<MonitoringSlotModel[]>([]);
 	const [errorDetails, setErrorDetails] = useState<MonitoringErrorDetail[]>([]);
 	const [loadingDetails, setLoadingDetails] = useState(false);
+	const [showKeys, setShowKeys] = useState(false);
 
 	const hoveredTrend = hoveredSlot
 		? trendMap.get(`${channel.channel_id}|${hoveredSlot}`)
@@ -149,6 +153,17 @@ const ChannelBar = ({
 					<span class={`font-medium ${rateColor(channel.success_rate)}`}>
 						{statusLabel(channel.success_rate)}
 					</span>
+					<button
+						type="button"
+						class={`rounded-lg px-2 py-1 text-xs font-medium transition ${
+							showKeys
+								? "bg-stone-900 text-white"
+								: "bg-stone-100 text-stone-600 hover:bg-stone-200"
+						}`}
+						onClick={() => setShowKeys((v) => !v)}
+					>
+						Key 健康
+					</button>
 				</div>
 			</div>
 
@@ -207,6 +222,80 @@ const ChannelBar = ({
 					) : (
 						<span class="text-stone-400"> &mdash; 无请求</span>
 					)}
+				</div>
+			)}
+
+			{/* Per-key health panel (multi-key channels) */}
+			{showKeys && (
+				<div class="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+					<div class="mb-2 flex items-center justify-between">
+						<span class="text-sm font-medium text-stone-800">Key 健康</span>
+						<span class="text-xs text-stone-400">仅显示指纹，不显示明文</span>
+					</div>
+					{(!keyStats || keyStats.length === 0) && (
+						<div class="text-xs text-stone-400">
+							暂无 key 维度数据（单 key 渠道或该实例尚无流量）
+						</div>
+					)}
+					{keyStats && keyStats.length > 0 && (
+						<table class="w-full text-xs">
+							<thead>
+								<tr class="border-b border-stone-200 text-left text-stone-500">
+									<th class="pb-1 font-medium">指纹</th>
+									<th class="pb-1 font-medium">状态</th>
+									<th class="pb-1 text-right font-medium">鉴权失败</th>
+									<th class="pb-1 text-right font-medium">重试失败</th>
+									<th class="pb-1 text-right font-medium">成功</th>
+									<th class="pb-1 text-right font-medium">24h 成功率</th>
+								</tr>
+							</thead>
+							<tbody>
+								{keyStats.map((k) => (
+									<tr key={k.key_tag} class="border-b border-stone-100">
+										<td class="py-1 font-mono text-stone-700">{k.key_tag}</td>
+										<td class="py-1">
+											{k.cooling ? (
+												<span class="rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">
+													冷却中
+												</span>
+											) : (
+												<span class="rounded bg-green-100 px-1.5 py-0.5 text-green-700">
+													正常
+												</span>
+											)}
+										</td>
+										<td
+											class={`py-1 text-right ${k.auth_fails > 0 ? "font-medium text-red-600" : "text-stone-400"}`}
+										>
+											{k.auth_fails}
+										</td>
+										<td
+											class={`py-1 text-right ${k.retryable_fails > 0 ? "text-yellow-600" : "text-stone-400"}`}
+										>
+											{k.retryable_fails}
+										</td>
+										<td class="py-1 text-right text-stone-600">
+											{k.successes}
+										</td>
+										<td
+											class={`py-1 text-right ${rateColor(k.success_rate_24h)}`}
+										>
+											{k.success_rate_24h !== null
+												? `${k.success_rate_24h}%`
+												: "-"}
+											<span class="ml-1 text-stone-400">
+												({k.ok_24h}/{k.ok_24h + k.error_24h})
+											</span>
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					)}
+					<div class="mt-2 text-xs text-stone-400">
+						鉴权失败（401/403）与重试失败（429/5xx/网络错）为本实例启动以来的累计值；
+						24h 成功率来自持久化末次归因（usage_logs.key_tag）。
+					</div>
 				</div>
 			)}
 
@@ -367,6 +456,14 @@ export const MonitoringView = ({
 		return map;
 	}, [monitoring]);
 
+	const keyStatsMap = useMemo(() => {
+		const map = new Map<string, MonitoringKeyStat[]>();
+		for (const entry of monitoring?.keyStats ?? []) {
+			map.set(entry.channel_id, entry.keys);
+		}
+		return map;
+	}, [monitoring]);
+
 	if (!monitoring) {
 		return (
 			<div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
@@ -482,6 +579,7 @@ export const MonitoringView = ({
 					range={range}
 					trendMap={trendMap}
 					token={token}
+					keyStats={keyStatsMap.get(ch.channel_id)}
 				/>
 			))}
 

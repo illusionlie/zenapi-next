@@ -21,6 +21,8 @@ export type UsageInput = {
 	status?: string | null;
 	errorCode?: number | null;
 	errorMessage?: string | null;
+	/** 8-hex fingerprint of the serving (ok) / last-attempted (error) key. */
+	keyTag?: string | null;
 };
 
 /** Max batch attempts: the initial call plus exactly one delayed retry. */
@@ -64,7 +66,7 @@ export async function recordUsage(
 	const statements = [
 		db
 			.prepare(
-				"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cached_input_tokens, cache_creation_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, error_code, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cached_input_tokens, cache_creation_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, error_code, error_message, key_tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			)
 			.bind(
 				id,
@@ -85,6 +87,7 @@ export async function recordUsage(
 				input.status ?? "ok",
 				input.errorCode ?? null,
 				input.errorMessage ?? null,
+				input.keyTag ?? null,
 				createdAt,
 			),
 	];

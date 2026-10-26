@@ -26,6 +26,11 @@ import {
 	splitWindow,
 	utcDateOf,
 } from "../apps/worker/src/services/usage-stats";
+import {
+	keyFingerprint,
+	recordKeyAuthFailure,
+	resetKeyCooldownsForTest,
+} from "../apps/worker/src/services/key-cooldown";
 
 // ---------------------------------------------------------------------------
 // In-memory SQLite D1 adapter (same shape D1 exposes: prepare/bind/run/all/
@@ -185,11 +190,12 @@ type LogOverrides = {
 	latency_ms?: number | null;
 	status?: string | null;
 	created_at?: string;
+	key_tag?: string | null;
 };
 
 function insertLog(db: DatabaseSync, o: LogOverrides = {}): void {
 	db.prepare(
-		"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cached_input_tokens, cache_creation_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, error_code, error_message, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, ?, NULL, NULL, ?)",
+		"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cached_input_tokens, cache_creation_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, error_code, error_message, key_tag, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, ?, NULL, NULL, ?, ?)",
 	).run(
 		`log_${++seq}`,
 		o.token_id ?? null,
@@ -203,6 +209,7 @@ function insertLog(db: DatabaseSync, o: LogOverrides = {}): void {
 		o.cost ?? 0,
 		o.latency_ms ?? 0,
 		o.status ?? "ok",
+		o.key_tag ?? null,
 		o.created_at!,
 	);
 }
@@ -1606,6 +1613,64 @@ describe("monitoring endpoint (channel health over rollup + raw)", () => {
 		expect(
 			payload.dailyTrends.reduce((sum, t) => sum + t.requests, 0),
 		).toBe(5);
+	});
+
+	it("merges per-key stats from the memory snapshot and 24h key_tag attribution", async () => {
+		resetKeyCooldownsForTest();
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const now = new Date();
+		const recent = new Date(now.getTime() - 60 * 60_000).toISOString();
+		insertChannel(sqlite, "c1", "Chan");
+		// Durable 24h attribution: sk-a has 1 ok + 1 error, sk-b only appears
+		// in D1 (no memory state — e.g. after a redeploy).
+		insertLog(sqlite, {
+			channel_id: "c1",
+			status: "ok",
+			key_tag: keyFingerprint("sk-a"),
+			created_at: recent,
+		});
+		insertLog(sqlite, {
+			channel_id: "c1",
+			status: "error",
+			key_tag: keyFingerprint("sk-a"),
+			created_at: recent,
+		});
+		insertLog(sqlite, {
+			channel_id: "c1",
+			status: "ok",
+			key_tag: keyFingerprint("sk-b"),
+			created_at: recent,
+		});
+		// Live memory: sk-a is cooling right now with one auth failure.
+		recordKeyAuthFailure("c1", "sk-a");
+
+		const res = await monitoringRoutes.request("/?range=1d", undefined, {
+			DB: db,
+		});
+		expect(res.status).toBe(200);
+		const payload = (await res.json()) as {
+			keyStats: Array<{
+				channel_id: string;
+				keys: Array<Record<string, unknown>>;
+			}>;
+		};
+		expect(payload.keyStats).toHaveLength(1);
+		const [channelStats] = payload.keyStats;
+		expect(channelStats.channel_id).toBe("c1");
+		expect(channelStats.keys).toHaveLength(2);
+		const byTag = new Map(channelStats.keys.map((k) => [k.key_tag, k]));
+		const a = byTag.get(keyFingerprint("sk-a"))!;
+		const b = byTag.get(keyFingerprint("sk-b"))!;
+		expect(a.cooling).toBe(true);
+		expect(a.auth_fails).toBe(1);
+		expect(a.ok_24h).toBe(1);
+		expect(a.error_24h).toBe(1);
+		expect(a.success_rate_24h).toBe(50);
+		expect(b.cooling).toBe(false);
+		expect(b.auth_fails).toBe(0);
+		expect(b.ok_24h).toBe(1);
+		expect(b.success_rate_24h).toBe(100);
 	});
 });
 

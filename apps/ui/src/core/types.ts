@@ -149,6 +149,32 @@ export type MonitoringSlotModel = {
 	avg_latency_ms: number;
 };
 
+/** 监测页 per-key 健康行（内存活值 + 24h key_tag 归因合并，任务 10-26-key-cooldown-stats）。 */
+export type MonitoringKeyStat = {
+	/** key 指纹（fnv1a32 前 8 hex），不含明文 */
+	key_tag: string;
+	cooling: boolean;
+	/** 冷却截止 epoch ms；0 = 未冷却 */
+	cooling_until: number;
+	/** 401/403 失败数（isolate 启动起累计） */
+	auth_fails: number;
+	/** 429/5xx/网络错失败数（isolate 启动起累计） */
+	retryable_fails: number;
+	successes: number;
+	/** epoch ms；0 = 从未 */
+	last_failure_at: number;
+	last_success_at: number;
+	/** 24h raw 窗口内的持久归因计数 */
+	ok_24h: number;
+	error_24h: number;
+	success_rate_24h: number | null;
+};
+
+export type MonitoringChannelKeyStats = {
+	channel_id: string;
+	keys: MonitoringKeyStat[];
+};
+
 export type MonitoringData = {
 	summary: {
 		total_requests: number;
@@ -167,6 +193,8 @@ export type MonitoringData = {
 		success_rate: number;
 	};
 	channels: MonitoringChannelData[];
+	/** 渠道多 Key 健康展开（后端可能未下发——旧 worker 兼容缺席） */
+	keyStats?: MonitoringChannelKeyStats[];
 	dailyTrends: MonitoringDailyTrend[];
 	range: string;
 };

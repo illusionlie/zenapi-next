@@ -38,6 +38,13 @@ import {
 	responsesToOpenaiRequest,
 } from "../services/format-converter";
 import {
+	filterCoolingKeys,
+	keyFingerprint,
+	recordKeyAuthFailure,
+	recordKeyRetryableFailure,
+	recordKeySuccess,
+} from "../services/key-cooldown";
+import {
 	loadAllChannelAliasesGrouped,
 	loadChannelAliasesByAlias,
 	loadChannelAliasOnlyMap,
@@ -940,18 +947,34 @@ proxy.all("/*", tokenAuth, async (c) => {
 	// Channel cooldown (P2): at most one failure record per channel per
 	// request, so multi-round retries cannot black-hole a channel alone.
 	const cooldownFailureRecorded = new Set<string>();
+	// Key attribution for usage records (R3): the fp of the key that served
+	// the successful response, or of the last attempted key when the request
+	// ended in an error (may stay null — channels with no serviceable keys).
+	let servedKeyFp: string | null = null;
+	let lastAttemptKeyFp: string | null = null;
 
 	let round = 0;
 	while (round < retryRounds && !selectedChannel) {
 		let shouldRetry = false;
 		for (const channel of ordered) {
 			lastChannel = channel;
-			const keys = shuffleArray(parseApiKeys(channel.api_key));
+			// Key-level cooldown (R1): drop cooling-down keys from this round's
+			// rotation before shuffling order is consumed. fail-open is built
+			// into filterCoolingKeys — when every key is cooling the full list
+			// is kept, so key cooldown never starves a channel of keys.
+			const keys = filterCoolingKeys(
+				channel.id,
+				shuffleArray(parseApiKeys(channel.api_key)),
+			);
 			let channelRetryable = false;
 			// Last attempt outcome for this channel — drives the cooldown
 			// accounting at the abandonment point below (design.md §判定语义).
 			let channelLastResponse: Response | null = null;
 			let channelLastAttemptThrew = false;
+			// Key attribution resets per channel: the usage row is written for
+			// `selectedChannel ?? lastChannel`, so the tag must come from the
+			// last attempted channel only.
+			lastAttemptKeyFp = null;
 
 			// Determine the model name this channel actually supports
 			// and prepare a channel-specific request body if needed
@@ -969,6 +992,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 			}
 
 			for (const apiKey of keys) {
+				// Key attribution (R3): fp of whichever key is on the wire now.
+				lastAttemptKeyFp = keyFingerprint(apiKey);
 				const incomingHeaders = new Headers(c.req.header());
 
 				const {
@@ -1006,6 +1031,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 					channelLastResponse = response;
 					channelLastAttemptThrew = false;
 					if (response.ok) {
+						// Key success (R1): this key reached a live upstream —
+						// clear its cooldown window immediately and remember it
+						// as the serving key for the usage row's key_tag.
+						recordKeySuccess(channel.id, apiKey);
+						servedKeyFp = lastAttemptKeyFp;
 						// 预设强制上游流式（客户端非流），仅对当前尝试渠道生效：
 						// 上游 SSE 在网关侧聚合为标准非流 JSON 再喂 convertResponse
 						// （其非流分支本就 await response.json()，本体零改动）。
@@ -1038,10 +1068,29 @@ proxy.all("/*", tokenAuth, async (c) => {
 						break;
 					}
 
+					if (response.status === 401 || response.status === 403) {
+						// Key-level auth failure (R1/R2, intentional client-visible
+						// behavior change): the credential is very likely dead —
+						// cool this key for 10 minutes and fail over to the next
+						// key (previously: break, so one stale key failed every
+						// request of a multi-key channel). This is NOT a channel
+						// failure — the upstream answered, proving it alive — so
+						// channelRetryable stays unset and the abandonment-point
+						// accounting keeps treating 401/403 as channel success
+						// (attribution split, design §0: unchanged by this task).
+						recordKeyAuthFailure(channel.id, apiKey);
+						continue;
+					}
 					if (isRetryableStatus(response.status)) {
+						// 408/429/5xx: upstream pressure, not a dead key — short
+						// key cooldown, then the existing semantics (next key +
+						// channel retryable).
+						recordKeyRetryableFailure(channel.id, apiKey);
 						channelRetryable = true;
 					} else {
-						// Non-retryable error — skip remaining keys for this channel
+						// Other non-retryable 4xx (400/404/413/422…): request-level
+						// error, another key cannot help — no key cooldown, skip
+						// remaining keys (unchanged).
 						break;
 					}
 				} catch {
@@ -1051,9 +1100,13 @@ proxy.all("/*", tokenAuth, async (c) => {
 						// received on this attempt — the accounting must reflect that
 						channelLastResponse = null;
 						channelLastAttemptThrew = true;
+						// Network error cools the key briefly (R1): same family as
+						// the retryable statuses.
+						recordKeyRetryableFailure(channel.id, apiKey);
 					}
 					// else: a response arrived but downstream conversion/parse
-					// failed — channelLastResponse keeps it as alive-proof
+					// failed — channelLastResponse keeps it as alive-proof, and
+					// the key itself did its job (no key cooldown).
 					channelRetryable = true;
 				}
 			}
@@ -1116,6 +1169,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 				reasoningEffort,
 				status: "error",
 				errorMessage: "upstream_unavailable",
+				// Last-attempt key attribution (R3); null when no key was ever
+				// put on the wire (e.g. no serviceable keys at all).
+				keyTag: lastAttemptKeyFp,
 			}),
 		);
 		return jsonError(c, 502, "upstream_unavailable", "upstream_unavailable");
@@ -1182,6 +1238,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 				status: lastResponse.ok ? "ok" : "error",
 				errorCode,
 				errorMessage,
+				// Key attribution (R3): the serving key on success, the last
+				// attempted key when the request ended in an upstream error.
+				keyTag: lastResponse.ok ? servedKeyFp : lastAttemptKeyFp,
 			});
 		};
 		const logUsage = (

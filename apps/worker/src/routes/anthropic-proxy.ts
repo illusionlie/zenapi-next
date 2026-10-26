@@ -28,6 +28,13 @@ import {
 	openaiToAnthropicResponse,
 } from "../services/format-converter";
 import {
+	filterCoolingKeys,
+	keyFingerprint,
+	recordKeyAuthFailure,
+	recordKeyRetryableFailure,
+	recordKeySuccess,
+} from "../services/key-cooldown";
+import {
 	type ChannelAliasHit,
 	loadChannelAliasesByAlias,
 	loadChannelAliasOnlyMap,
@@ -305,6 +312,11 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	// Channel cooldown (P2): at most one failure record per channel per
 	// request, so multi-round retries cannot black-hole a channel alone.
 	const cooldownFailureRecorded = new Set<string>();
+	// Key attribution for usage records (R3): the fp of the key that served
+	// the successful response, or of the last attempted key when the request
+	// ended in an error (may stay null — channels with no serviceable keys).
+	let servedKeyFp: string | null = null;
+	let lastAttemptKeyFp: string | null = null;
 
 	let round = 0;
 	while (round < retryRounds && !selectedChannel) {
@@ -314,12 +326,23 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 			lastChannel = channel;
 			const apiFormat = channel.api_format ?? "openai";
 			const disguisePrompt = channel.disguise_system_prompt ?? null;
-			const keys = shuffleArray(parseApiKeys(channel.api_key));
+			// Key-level cooldown (R1): drop cooling-down keys from this round's
+			// rotation before the shuffled order is consumed. fail-open is
+			// built into filterCoolingKeys — when every key is cooling the
+			// full list is kept, so key cooldown never starves a channel.
+			const keys = filterCoolingKeys(
+				channel.id,
+				shuffleArray(parseApiKeys(channel.api_key)),
+			);
 			let channelRetryable = false;
 			// Last attempt outcome for this channel — drives the cooldown
 			// accounting at the abandonment point below (design.md §判定语义).
 			let channelLastResponse: Response | null = null;
 			let channelLastAttemptThrew = false;
+			// Key attribution resets per channel: the usage row is written for
+			// `selectedChannel ?? lastChannel`, so the tag must come from the
+			// last attempted channel only.
+			lastAttemptKeyFp = null;
 
 			// Determine the model name this channel actually supports
 			let channelRequestText = effectiveRequestText;
@@ -339,6 +362,8 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 			}
 
 			for (const apiKey of keys) {
+				// Key attribution (R3): fp of whichever key is on the wire now.
+				lastAttemptKeyFp = keyFingerprint(apiKey);
 				// Per-attempt response for the cooldown accounting: a fetch throw
 				// and a post-response conversion throw must not be conflated —
 				// any received HTTP response proves the upstream alive (design's
@@ -423,6 +448,10 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						channelLastAttemptThrew = false;
 
 						if (response.ok) {
+							// Key success (R1): clear this key's cooldown window and
+							// remember it as the serving key for the usage row.
+							recordKeySuccess(channel.id, apiKey);
+							servedKeyFp = lastAttemptKeyFp;
 							selectedChannel = channel;
 							selectedModelName = channelModelName;
 							// 预设强制上游流式（客户端非流式入站）：上游 SSE 在网关
@@ -507,6 +536,10 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						channelLastAttemptThrew = false;
 
 						if (response.ok) {
+							// Key success (R1): clear this key's cooldown window and
+							// remember it as the serving key for the usage row.
+							recordKeySuccess(channel.id, apiKey);
+							servedKeyFp = lastAttemptKeyFp;
 							selectedChannel = channel;
 							selectedModelName = channelModelName;
 							// Convert OpenAI response back to Anthropic format
@@ -576,6 +609,10 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						channelLastAttemptThrew = false;
 
 						if (response.ok) {
+							// Key success (R1): clear this key's cooldown window and
+							// remember it as the serving key for the usage row.
+							recordKeySuccess(channel.id, apiKey);
+							servedKeyFp = lastAttemptKeyFp;
 							selectedChannel = channel;
 							selectedModelName = channelModelName;
 							lastResponse = response;
@@ -584,9 +621,27 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 					}
 
 					lastResponse = response;
+					if (response.status === 401 || response.status === 403) {
+						// Key-level auth failure (R1/R2, intentional client-visible
+						// behavior change): the credential is very likely dead —
+						// cool this key for 10 minutes and fail over to the next
+						// key (previously: break). NOT a channel failure — the
+						// upstream answered, proving it alive — so channelRetryable
+						// stays unset and the abandonment-point accounting keeps
+						// treating 401/403 as channel success (attribution split).
+						recordKeyAuthFailure(channel.id, apiKey);
+						continue;
+					}
 					if (isRetryableStatus(response.status)) {
+						// 408/429/5xx: upstream pressure, not a dead key — short
+						// key cooldown, then the existing semantics (next key +
+						// channel retryable).
+						recordKeyRetryableFailure(channel.id, apiKey);
 						channelRetryable = true;
 					} else {
+						// Other non-retryable 4xx (400/404/413/422…): request-level
+						// error, another key cannot help — no key cooldown, skip
+						// remaining keys (unchanged).
 						break;
 					}
 				} catch {
@@ -596,9 +651,13 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						// received on this attempt — the accounting must reflect that
 						channelLastResponse = null;
 						channelLastAttemptThrew = true;
+						// Network error cools the key briefly (R1): same family as
+						// the retryable statuses.
+						recordKeyRetryableFailure(channel.id, apiKey);
 					}
 					// else: a response arrived but downstream conversion/parse
-					// failed — channelLastResponse keeps it as alive-proof
+					// failed — channelLastResponse keeps it as alive-proof, and
+					// the key itself did its job (no key cooldown).
 					channelRetryable = true;
 				}
 			}
@@ -661,6 +720,9 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 				stream: isStream,
 				status: "error",
 				errorMessage: "upstream_unavailable",
+				// Last-attempt key attribution (R3); null when no key was ever
+				// put on the wire.
+				keyTag: lastAttemptKeyFp,
 			}),
 		);
 		return jsonError(c, 502, "upstream_unavailable", "upstream_unavailable");
@@ -726,6 +788,9 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 				status: lastResponse.ok ? "ok" : "error",
 				errorCode,
 				errorMessage,
+				// Key attribution (R3): the serving key on success, the last
+				// attempted key when the request ended in an upstream error.
+				keyTag: lastResponse.ok ? servedKeyFp : lastAttemptKeyFp,
 			});
 		};
 
