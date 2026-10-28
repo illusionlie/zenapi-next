@@ -716,3 +716,29 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed** 批次 8/8 全部完成并归档（count_tokens / 隐私头剥离 / 令牌过期 / 限流 / key 冷却统计 / 备份恢复 / webhook 报警 / 主动探测），父任务验收清单全勾，最终 916 用例全绿。全程主会话亲跑门禁 + 抽查核心 diff；限流任务经历一次代理限额中断（半成品续做模式）。key 冷却要点：401/403 由 break 改 continue 是有意的客户端可见行为变更（原单把失效 key 拖垮多 key 渠道）；408 归入 retryable 短冷却组（isRetryableStatus 集合整体处理）；既有断言零改动（存量测试渠道均单 key，循环语义等价）。限流任务两段式：首代理限额中断留 worker 侧半成品，续做代理审计采纳 + 补 settings.ts 断点（GET 未进响应体/PUT 无分支/未用 import）+ UI + 文档；PRD 曾有 rpm_limit NULL=不限 缺陷致全局默认对存量令牌失效，design 阶段修正为 NULL=跟随默认/0=显式豁免
+
+
+## Session 21: responses↔anthropic pivot 转换与流式存量缺口修复
+
+**Date**: 2026-10-28
+**Task**: responses↔anthropic pivot 转换与流式存量缺口修复
+**Branch**: `main`
+
+### Summary
+
+任务一 10-27-responses-anthropic-pivot：经 chat 枢纽两跳组合打通路由矩阵最后两条斜边（零新增转换器，单跳优先双跳偏好序，无配置开关），4 组合函数 + proxy/anthropic-proxy 接线 + 14 集成测试，顺手修复 message_delta 不转发 input_tokens 的存量计费缺陷（anthropic 入站+openai 目标流式 prompt 恒记零），929 测试绿。任务二 10-28-stream-usage-and-stop-fix：补全 anthropic 入站+openai 目标普通流式的 include_usage 注入（每尝试拷贝、恰一次、非流式字节零变化）与 message_stop 恰一守卫（[DONE]/截断/error/空流四路径），935 测试绿。两任务均 implement→check→亲跑门禁全链路，spec（channel-routing/format-conversion）与 AGENTS.md §8 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `19965cb` | (see git log) |
+| `0c2652b` | (see git log) |
+| `ac34eaf` | (see git log) |
+| `6bd3514` | (see git log) |
+| `a8f2796` | (see git log) |
+| `1d94f5c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
