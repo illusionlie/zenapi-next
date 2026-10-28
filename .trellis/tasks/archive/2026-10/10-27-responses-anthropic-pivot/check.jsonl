@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁（check/typecheck/test）、Biome 规则、命名禁则——AC7 验收标准"}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "核对路由矩阵 14 格零回归断言与新增 2 格断言、偏好序单跳优先于 pivot、消费点无自建特判"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "核对组合接缝行为（[DONE] 恰一/不外泄、usage 末 chunk 三值、error 终止形态）与测试锚覆盖（runStreamTransform + parseSseData 模式）"}
+{"file": ".trellis/spec/api-worker/backend/logging-guidelines.md", "reason": "新增组合函数的 warn 日志须带 [format-converter] 前缀标签（fail-open 丢弃惯例延续）"}

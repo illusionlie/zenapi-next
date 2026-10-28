@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "路由矩阵契约：selectTargetFormat 可服务集合/偏好序语义、消费点三处共用铁律、16 格矩阵测试锚、base_url 规范化——步骤 1/3/4/5 的约束面"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "转换器契约：usage 单末 chunk 三值、[DONE] 不变量、thinking 映射、fail-open 丢弃、流式不变量——pivot 组合接缝的全部依赖面与测试锚模式"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "usage 解析→落库口径（parseUsageFromSse 逐字段合并、缓存字段优先级链）——AC3 验收与 cache_creation 有损口径声明的依据"}
+{"file": "AGENTS.md", "reason": "§8 代理关键行为（路由矩阵、include_usage 注入条件、伪装预设 body 合规、count_tokens 本地估算）与 §5 代码规范——步骤 2/3/4/7 的行为事实来源与文档同步目标"}
