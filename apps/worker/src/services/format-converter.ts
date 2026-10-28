@@ -1227,11 +1227,26 @@ export function createOpenaiToAnthropicStreamTransform(
 ): TransformStream<Uint8Array, Uint8Array> {
 	let buffer = "";
 	let sentMessageStart = false;
+	let sentMessageStop = false;
 	let contentBlockIndex = 0;
 	let hasTextBlock = false;
 	const activeToolIndices = new Map<number, number>(); // openai tool index → anthropic content block index
 	const encoder = new TextEncoder();
 	const decoder = new TextDecoder();
+
+	// message_stop 恰一不变量：[DONE] 与 flush() 共享同一守卫——至多入队一次
+	// message_stop，且必须有 message_start 前缀（空流不产孤儿 stop）。
+	const emitMessageStop = (
+		controller: TransformStreamDefaultController<Uint8Array>,
+	) => {
+		if (!sentMessageStart || sentMessageStop) {
+			return;
+		}
+		sentMessageStop = true;
+		controller.enqueue(
+			encoder.encode(`event: message_stop\ndata: {"type":"message_stop"}\n\n`),
+		);
+	};
 
 	return new TransformStream({
 		transform(chunk, controller) {
@@ -1250,11 +1265,8 @@ export function createOpenaiToAnthropicStreamTransform(
 				const payload = line.slice(5).trim();
 				if (!payload || payload === "[DONE]") {
 					if (payload === "[DONE]") {
-						controller.enqueue(
-							encoder.encode(
-								`event: message_stop\ndata: {"type":"message_stop"}\n\n`,
-							),
-						);
+						// 正常收尾：恰一次 message_stop（flush 不再补发）
+						emitMessageStop(controller);
 					}
 					newlineIndex = buffer.indexOf("\n");
 					continue;
@@ -1451,14 +1463,9 @@ export function createOpenaiToAnthropicStreamTransform(
 			}
 		},
 		flush(controller) {
-			if (!sentMessageStart) {
-				return;
-			}
-			controller.enqueue(
-				encoder.encode(
-					`event: message_stop\ndata: {"type":"message_stop"}\n\n`,
-				),
-			);
+			// 截断流（上游缺 [DONE]）或流内 error 后的兜底终止：同一守卫下
+			// 至多一次 message_stop，且无 message_start 时不发。
+			emitMessageStop(controller);
 		},
 	});
 }

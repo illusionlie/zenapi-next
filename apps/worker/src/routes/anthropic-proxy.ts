@@ -499,28 +499,41 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 						let bodyToSend = channelOpenaiBody
 							? JSON.stringify(channelOpenaiBody)
 							: channelRequestText;
-						// Disguise prompt (#7, design §3.1) 与预设 body 合规（D5）
-						// 共享同一重写 gate：无预设且无伪装时保持既有字节（零重
-						// 序列化，零回归）。openaiCopy 是每尝试浅拷贝——共享的转换
-						// 产物 channelOpenaiBody 跨重试轮/Key 复用，mutate 必须落在
-						// 拷贝上（inject 只写顶层字段，transform 的 tools 数组在
-						// 引擎内先拷贝再追加，均不污染共享体）。
+						// Disguise prompt (#7, design §3.1)、预设 body 合规（D5）与
+						// 流式 usage 注入共享同一重写 gate：无预设、无伪装且客户端
+						// 非流式时保持既有字节（零重序列化，零回归）。openaiCopy 是
+						// 每尝试浅拷贝——共享的转换产物 channelOpenaiBody 跨重试轮/
+						// Key 复用，mutate 必须落在拷贝上（inject 只写顶层字段，
+						// transform 的 tools 数组在引擎内先拷贝再追加，均不污染
+						// 共享体）。channelOpenaiBody 为 null（channelRequestText
+						// 回退）时上游体形状未知，gate 不放行、不注入。
 						const presetTouchesBody =
 							preset !== null && channelOpenaiBody !== null;
-						if ((disguisePrompt && channelOpenaiBody) || presetTouchesBody) {
+						if (
+							(disguisePrompt && channelOpenaiBody) ||
+							presetTouchesBody ||
+							(isStream && channelOpenaiBody)
+						) {
 							const openaiCopy: Record<string, unknown> = {
 								...channelOpenaiBody,
 							};
 							let changed = false;
 							if (preset) {
 								changed = preset.transformBody(openaiCopy) || changed;
-								if (preset.forceUpstreamStream && openaiCopy.stream === true) {
-									// 强制流式的 chat 上游同样需要 usage 尾 chunk（上游真
-									// 流式才有 usage 可解析）；stream === true 即形状门禁
-									// 已命中、transformBody 已写流式标记。
-									openaiCopy.stream_options = { include_usage: true };
-									changed = true;
-								}
+							}
+							// 流式 usage 注入（恰一次的单一表达式）：客户端流式的普通
+							// 路径与预设强制上游流式共用——OpenAI 兼容上游需要 usage
+							// 尾 chunk 开关，否则该路径 usage 依赖上游自愿携带（存量
+							// 计费缺口）；非流式请求不进此分支（字节零变化）。预设
+							// 分支的 stream === true 即形状门禁已命中、transformBody
+							// 已写流式标记。
+							if (
+								isStream ||
+								(preset?.forceUpstreamStream === true &&
+									openaiCopy.stream === true)
+							) {
+								openaiCopy.stream_options = { include_usage: true };
+								changed = true;
 							}
 							if (disguisePrompt) {
 								injectSystemPromptOpenAI(openaiCopy, disguisePrompt);

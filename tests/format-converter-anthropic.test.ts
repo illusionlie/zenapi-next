@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	anthropicToOpenaiResponse,
 	createAnthropicToOpenaiStreamTransform,
+	createOpenaiToAnthropicStreamTransform,
 	mapFinishReason,
 	mapStopReason,
 	openaiToAnthropicRequest,
@@ -963,6 +964,160 @@ describe("createAnthropicToOpenaiStreamTransform", () => {
 		expect(firstChoice(chunks[1] as Record<string, unknown>).finish_reason).toBe(
 			"length",
 		);
+	});
+});
+
+// --- createOpenaiToAnthropicStreamTransform（anthropic 入站 + openai 目标方向）---
+
+/** OpenAI chat SSE chunk data line（含可选 usage / finish_reason 覆盖）。 */
+function chatChunkLine(
+	delta: Record<string, unknown>,
+	options: { finishReason?: string | null; usage?: Record<string, unknown> } = {},
+): string {
+	return `data: ${JSON.stringify({
+		id: "chatcmpl-1",
+		object: "chat.completion.chunk",
+		created: 1730000000,
+		model: "test-model",
+		choices: [
+			{ index: 0, delta, finish_reason: options.finishReason ?? null },
+		],
+		...(options.usage !== undefined ? { usage: options.usage } : {}),
+	})}\n\n`;
+}
+
+async function runOpenaiToAnthropicStream(input: string): Promise<string> {
+	const transform = createOpenaiToAnthropicStreamTransform("test-model");
+	const writer = transform.writable.getWriter();
+	const reader = transform.readable.getReader();
+	const write = (async () => {
+		await writer.write(new TextEncoder().encode(input));
+		await writer.close();
+	})();
+	let output = "";
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) {
+			break;
+		}
+		output += new TextDecoder().decode(value);
+	}
+	await write;
+	return output;
+}
+
+type AnthropicEvent = { event: string; data: Record<string, unknown> };
+
+/** 解析转换器产出的 anthropic SSE（event: X + data: {...} 双行块）。 */
+function parseAnthropicEvents(output: string): AnthropicEvent[] {
+	return output
+		.split("\n\n")
+		.map((block) => block.trim())
+		.filter((block) => block.length > 0)
+		.map((block) => {
+			const eventLine = block
+				.split("\n")
+				.find((line) => line.startsWith("event: "));
+			const dataLine = block
+				.split("\n")
+				.find((line) => line.startsWith("data: "));
+			return {
+				event: eventLine?.slice("event: ".length) ?? "",
+				data: JSON.parse(dataLine?.slice("data: ".length) ?? "{}") as Record<
+					string,
+					unknown
+				>,
+			};
+		});
+}
+
+function countStops(events: AnthropicEvent[]): number {
+	return events.filter((e) => e.event === "message_stop").length;
+}
+
+describe("createOpenaiToAnthropicStreamTransform message_stop 恰一不变量（AC3）", () => {
+	it("[DONE] 正常收尾：message_stop 恰一次（flush 不补发），usage 尾经 message_delta 存活", async () => {
+		const input = [
+			chatChunkLine({ role: "assistant", content: "" }),
+			chatChunkLine({ content: "Hello" }),
+			chatChunkLine(
+				{},
+				{
+					finishReason: "stop",
+					usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+				},
+			),
+			"data: [DONE]\n\n",
+		].join("");
+		const output = await runOpenaiToAnthropicStream(input);
+		const events = parseAnthropicEvents(output);
+		expect(countStops(events)).toBe(1);
+		expect(events[events.length - 1].event).toBe("message_stop");
+
+		// message_start → text 块（空 role chunk 的 "" 与 "Hello" 各一个 delta）
+		// → message_delta → message_stop
+		expect(events[0].event).toBe("message_start");
+		const textDeltas = events.filter((e) => e.event === "content_block_delta");
+		expect(textDeltas).toHaveLength(2);
+		expect(textDeltas[1].data.delta).toEqual({
+			type: "text_delta",
+			text: "Hello",
+		});
+		const messageDelta = events.find((e) => e.event === "message_delta");
+		expect(messageDelta?.data.delta).toEqual({ stop_reason: "end_turn" });
+		// 终止 chunk 携带 prompt 时转发 input_tokens（spec §3.7 方向 B seam）
+		expect(messageDelta?.data.usage).toEqual({
+			output_tokens: 3,
+			input_tokens: 5,
+		});
+
+		// parseUsageFromSse 联动：raw 合并恢复 prompt（message_start 基线 0
+		// 被非 null 覆盖），三值齐全
+		const parsed = await parseUsageFromSse(new Response(output));
+		expect(parsed.usage).toEqual({
+			totalTokens: 8,
+			promptTokens: 5,
+			completionTokens: 3,
+			cachedInputTokens: null,
+			cacheCreationTokens: null,
+		});
+		expect(parsed.usage?.promptTokens).toBeGreaterThan(0);
+	});
+
+	it("截断流（无 [DONE]）：flush 兜底发出恰一次 message_stop", async () => {
+		const input = [
+			chatChunkLine({ role: "assistant", content: "" }),
+			chatChunkLine(
+				{},
+				{ finishReason: "stop", usage: { prompt_tokens: 4, completion_tokens: 2 } },
+			),
+		].join("");
+		const output = await runOpenaiToAnthropicStream(input);
+		const events = parseAnthropicEvents(output);
+		expect(countStops(events)).toBe(1);
+		expect(events[events.length - 1].event).toBe("message_stop");
+		expect(events.filter((e) => e.event === "message_delta")).toHaveLength(1);
+	});
+
+	it("流内 error 载荷：恰一次 message_stop（error chunk 触发 message_start，无 message_delta）", async () => {
+		const input = [
+			`data: ${JSON.stringify({
+				error: { message: "boom", type: "server_error" },
+			})}\n\n`,
+			"data: [DONE]\n\n",
+		].join("");
+		const output = await runOpenaiToAnthropicStream(input);
+		const events = parseAnthropicEvents(output);
+		expect(events[0].event).toBe("message_start");
+		expect(events.filter((e) => e.event === "message_delta")).toHaveLength(0);
+		expect(countStops(events)).toBe(1);
+		expect(events[events.length - 1].event).toBe("message_stop");
+	});
+
+	it("空流（只有 [DONE]）：零 message_stop、零 message_start（孤儿 stop 消除）", async () => {
+		const output = await runOpenaiToAnthropicStream("data: [DONE]\n\n");
+		expect(output).toBe("");
+		expect(parseAnthropicEvents(output)).toHaveLength(0);
 	});
 });
 
