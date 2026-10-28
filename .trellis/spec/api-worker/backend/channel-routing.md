@@ -50,11 +50,11 @@ export function resolveEndpointBaseUrl(
 | InboundProtocol | 偏好序（高→低） | 可服务集合 |
 |---|---|---|
 | chat | openai > responses > anthropic > custom | 四者全部 |
-| responses | responses > openai > custom | 排除 anthropic（无 responses→anthropic 转换） |
-| anthropic | anthropic > openai > custom | 排除 responses（同上反向） |
-| passthrough | openai > responses > custom | 排除 anthropic |
+| responses | responses > openai > anthropic > custom | 四者全部（anthropic 经 chat pivot，2026-10-27 起） |
+| anthropic | anthropic > openai > responses > custom | 四者全部（responses 经 chat pivot，同上） |
+| passthrough | openai > responses > custom | 排除 anthropic（透传域无转换边） |
 
-`custom` 在偏好序末位仅防御（写侧已禁组合）；**responses↔anthropic 转换不存在**，两侧互斥由 selectTargetFormat 的 null 返回表达，不得在路由层另写特判。
+偏好序规则「**单跳优先于双跳**」（任务 10-27-responses-anthropic-pivot）：跳数越少失真越小、CPU 越省；openai(chat) 是最成熟的单跳兜底恒排 pivot 前；pivot（responses↔anthropic 经 chat 枢纽两跳，转换组合见 format-conversion.md）恒为末位兜底，custom 仅防御（写侧已禁组合）。斜边不再是 null 排除——`selectTargetFormat` 无逻辑改动，扩展偏好序数组即放行资格；16 格矩阵仅 2 格翻转（responses×anthropic、anthropic×responses），14 格逐字节不变，测试锚 `tests/channel-routing.test.ts` + `tests/proxy-pivot.test.ts`。
 
 > **2026-10-19 P1 起**：代理热路径的活跃渠道列表经 `getActiveChannelsCached`（`services/channels.ts`）10s TTL 缓存供给；缓存行**只读共享**，消费方（`createWeightedOrder` / `resolveChannelRoute` / routing）不得变异（现状均为副本/浅拷贝/只读访问）。管理台渠道 CRUD 的生效陈旧窗口 ≤10s（AGENTS §8）。资格判定与 selectTargetFormat 契约不受缓存影响——缓存的只是「从哪读行」，不是「怎么判格式」。
 
@@ -111,10 +111,11 @@ coding plan 类上游不同协议挂在不同 URL（无推导关系），`endpoi
 
 ## 6. Tests Required
 
-- `tests/channel-routing.test.ts`：单格式 4×4=16 格**逐格独立断言** + 多格式偏好矩阵（含声明顺序无关性）。
+- `tests/channel-routing.test.ts`：单格式 4×4=16 格**逐格独立断言** + 多格式偏好矩阵（含声明顺序无关性、单跳优先于 pivot 的 AC4）。
 - `tests/channel-formats.test.ts`：normalize/parse 全分支（非数组、白名单过滤、custom 独占、规范序、三级兜底、畸形 JSON）。
 - `tests/channel-testing.test.ts`：并集去重、部分失败 `probe_warnings`、全失败、POST/PATCH 400 矩阵、镜像双写、base_url 两种规范化。
 - `tests/proxy-responses.test.ts` 集成：AC3（转换 URL/体/协议/usage 落库 prompt>0）、AC4（`["openai","responses"]` 透传 `toHaveBeenCalledTimes(1)` 锁死路径回退不存在）、AC6/AC7 偏好序。
+- `tests/proxy-pivot.test.ts` 集成（2026-10-27 增）：斜边两方向 × 非流式/流式 × usage 接缝（`parseUsageFromSse` prompt>0、cache 存活/折总量口径）× 工具往返 × error 终止形态锁定；count_tokens 对 responses-only 候选的本地估算锚在 `tests/anthropic-count-tokens.test.ts`。
 - `tests/channel-endpoints.test.ts`：resolver 矩阵（覆盖优先 / 兜底 byte-identical 写死对照 / 畸形脏数据）、覆盖生效集成（anthropic `/v1/messages` + 探测 `/v1/models`、responses `/responses`、openai `/chat/completions` 与透传 `{override}{subPath}`、chat 入站不受 anthropic 覆盖影响反例）、normalizeEndpointOverrides 校验矩阵与三态、repo 新列绑定序。
 
 ## 7. Wrong vs Correct
