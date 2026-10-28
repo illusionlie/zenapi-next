@@ -183,15 +183,23 @@ describe("POST /anthropic/v1/messages/count_tokens", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("503 no_available_channels for a responses-only channel (anthropic inbound excludes responses)", async () => {
+	it("responses-only channel: local estimate 200, zero upstream fetches (AC6 — non-anthropic target never probes)", async () => {
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
-		const { env } = makeEnv([makeChannel({ api_format: "responses" })]);
-		const res = await postCountTokens(env, countTokensBody("test-model"));
-		expect(res.status).toBe(503);
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(body.code).toBe("no_available_channels");
+		const { env, runs } = makeEnv([makeChannel({ api_format: "responses" })]);
+		const body = countTokensBody("test-model");
+		const res = await postCountTokens(env, body);
+		expect(res.status).toBe(200);
+		const parsed = (await res.json()) as { input_tokens: number };
+		expect(parsed.input_tokens).toBe(
+			Math.max(1, Math.ceil(body.length / 4)),
+		);
+		// The routing matrix now selects "responses" as the target format, but
+		// count_tokens only probes anthropic-target channels — this candidate
+		// falls out of the probe pool and degrades to the local estimate.
 		expect(fetchMock).not.toHaveBeenCalled();
+		// Zero-cost discipline: no usage INSERT, no quota/balance UPDATE
+		expect(runs).toEqual([]);
 	});
 
 	it("anthropic channel: passes through to {base}/v1/messages/count_tokens and returns the upstream count untouched", async () => {

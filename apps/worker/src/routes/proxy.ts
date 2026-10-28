@@ -26,6 +26,7 @@ import {
 } from "../services/client-presets";
 import {
 	anthropicToOpenaiResponse,
+	anthropicToResponsesResponse,
 	createAnthropicToOpenaiStreamTransform,
 	createOpenaiToResponsesStreamTransform,
 	createResponsesToChatStreamTransform,
@@ -34,6 +35,7 @@ import {
 	openaiToAnthropicRequest,
 	openaiToResponsesRequest,
 	openaiToResponsesResponse,
+	responsesToAnthropicRequest,
 	responsesToChatResponse,
 	responsesToOpenaiRequest,
 } from "../services/format-converter";
@@ -255,8 +257,20 @@ export function buildChannelRequest(
 			preset?.headers,
 		);
 
+		// Responses inbound + anthropic target (responses↔anthropic pivot):
+		// the parsed body speaks Responses, so the conversion composes the two
+		// chat-hub legs (responsesToOpenaiRequest → openaiToAnthropicRequest)
+		// instead of the single chat hop. Chat inbound keeps the single hop.
+		// The final upstream body is anthropic-shaped — chat-only
+		// stream_options.include_usage injection does not apply here (anthropic
+		// streams carry usage in message_delta on their own).
+		const responsesInbound = targetPath
+			.toLowerCase()
+			.startsWith("/v1/responses");
 		const anthropicBody = parsedBody
-			? openaiToAnthropicRequest(parsedBody)
+			? responsesInbound
+				? responsesToAnthropicRequest(parsedBody)
+				: openaiToAnthropicRequest(parsedBody)
 			: {};
 		if (isStream) {
 			(anthropicBody as Record<string, unknown>).stream = true;
@@ -536,7 +550,10 @@ export function buildChannelRequest(
  * - responses target + chat inbound → Responses→chat conversion (existing)
  * - openai target + /v1/responses inbound → chat→Responses conversion (the
  *   request side was converted to a chat completions call)
- * - anthropic target → Anthropic→chat conversion
+ * - anthropic target + chat inbound → Anthropic→chat conversion
+ * - anthropic target + /v1/responses inbound → Anthropic→chat→Responses pivot
+ *   (streaming pipes both transforms in series; the intermediate chat stream
+ *   never hits the wire)
  * Responses-native (/v1/responses target) and passthrough paths return as-is.
  */
 export async function convertResponse(
@@ -600,9 +617,19 @@ export async function convertResponse(
 	}
 
 	if (apiFormat === "anthropic" && response.ok) {
+		// Responses inbound + anthropic target (responses↔anthropic pivot):
+		// compose Anthropic→chat→Responses so the client still speaks the
+		// Responses protocol; chat inbound keeps the single hop.
+		const responsesInbound = inboundPath
+			.toLowerCase()
+			.startsWith("/v1/responses");
 		if (isStream && response.body) {
 			const transform = createAnthropicToOpenaiStreamTransform();
-			const transformed = response.body.pipeThrough(transform);
+			const transformed = responsesInbound
+				? response.body
+						.pipeThrough(transform)
+						.pipeThrough(createOpenaiToResponsesStreamTransform())
+				: response.body.pipeThrough(transform);
 			return new Response(transformed, {
 				status: response.status,
 				headers: {
@@ -614,6 +641,13 @@ export async function convertResponse(
 		}
 
 		const anthropicData = (await response.json()) as Record<string, unknown>;
+		if (responsesInbound) {
+			const responsesData = anthropicToResponsesResponse(anthropicData);
+			return new Response(JSON.stringify(responsesData), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}
 		const openaiData = anthropicToOpenaiResponse(anthropicData);
 		return new Response(JSON.stringify(openaiData), {
 			status: 200,

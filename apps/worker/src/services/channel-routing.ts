@@ -23,18 +23,19 @@ export type InboundProtocol =
  * custom 排末位仅为防御（校验层 normalizeApiFormats 已禁 custom 组合），
  * 保证单 custom 渠道行为与现状一致。
  *
- * 行为保持约束（PRD R2）：单格式渠道在各协议下的既有路由结果逐一保持——
- *   chat:        openai > responses > anthropic > custom（全格式可服务）
- *   responses:   responses > openai > custom（anthropic 排除，无转换）
- *   anthropic:   anthropic > openai > custom（responses 排除，无转换）
- *   passthrough: openai > responses > custom（anthropic 排除）
- * 即旧 allowedFormatsForPath / anthropic-proxy 内联过滤的资格集合。
+ * 偏好序规则（任务 10-27-responses-anthropic-pivot）：单跳优先于双跳——
+ * 跳数越少失真越小、CPU 越省；openai(chat) 是最成熟的单跳兜底，恒排在
+ * pivot（经 chat 枢纽的两跳转换）之前；pivot 恒为末位兜底。
+ *   chat:        openai > responses > anthropic > custom（全格式单跳可服务）
+ *   responses:   responses > openai > anthropic > custom（anthropic 经 chat pivot）
+ *   anthropic:   anthropic > openai > responses > custom（responses 经 chat pivot）
+ *   passthrough: openai > responses > custom（anthropic 排除——无透传/转换边）
  */
 const FORMAT_PREFERENCE: Record<InboundProtocol, readonly ChannelApiFormat[]> =
 	{
 		chat: ["openai", "responses", "anthropic", "custom"],
-		responses: ["responses", "openai", "custom"],
-		anthropic: ["anthropic", "openai", "custom"],
+		responses: ["responses", "openai", "anthropic", "custom"],
+		anthropic: ["anthropic", "openai", "responses", "custom"],
 		passthrough: ["openai", "responses", "custom"],
 	};
 

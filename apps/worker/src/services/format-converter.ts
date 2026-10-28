@@ -1418,12 +1418,24 @@ export function createOpenaiToAnthropicStreamTransform(
 							);
 						}
 
+						const messageDeltaUsage: Record<string, unknown> = {
+							output_tokens: (usage?.completion_tokens as number) ?? 0,
+						};
+						// Forward the prompt side when the terminal chunk carries it
+						// (spec §3.1: the usage lives on the single terminal chunk —
+						// message_start only saw the usage-free first chunk, so its
+						// input_tokens baseline is 0; parseUsageFromSse's non-null
+						// override then recovers the true prompt). Without this the
+						// chat→anthropic pivot (anthropic-proxy responses target)
+						// would bill prompt_tokens = 0.
+						const promptTokens = usage?.prompt_tokens;
+						if (typeof promptTokens === "number") {
+							messageDeltaUsage.input_tokens = promptTokens;
+						}
 						const messageDelta = {
 							type: "message_delta",
 							delta: { stop_reason: mapFinishReason(finishReason) },
-							usage: {
-								output_tokens: (usage?.completion_tokens as number) ?? 0,
-							},
+							usage: messageDeltaUsage,
 						};
 						controller.enqueue(
 							encoder.encode(
@@ -2892,6 +2904,76 @@ export function createOpenaiToResponsesStreamTransform(): TransformStream<
 			emitTerminal(controller, null);
 		},
 	});
+}
+
+// --- Pivot: responses ↔ anthropic composed via the chat hub (2026-10-27) ---
+//
+// The two diagonal edges of the routing matrix are NOT new single-hop
+// converters — each is a pure composition of the existing eight primitives
+// above (design.md §1: zero new conversion logic). The intermediate chat
+// shape is the contract both sides already honor (spec §3.1 single terminal
+// usage chunk, §3.5 [DONE] exactly once, §3.6 [DONE] consumed as a bare end
+// signal), which is what makes the two-hop composition lossless at the seam.
+//
+// Known lossy surfaces (declared, all inherited from the legs — never new):
+// - anthropic cache_creation folds into the chat prompt total and is not
+//   separately recoverable (responses clients see it only inside
+//   input_tokens; usage_logs.cache_creation_tokens stays NULL on this path).
+// - thinking signatures / redacted_thinking never round-trip (existing
+//   chat↔anthropic limitation).
+// - responses stateful fields (store / previous_response_id / …) are dropped
+//   by responsesToOpenaiRequest as before.
+// - chat→anthropic cannot split cache_read/creation back out of a chat total
+//   (existing convention: "cannot split exactly, don't").
+
+/**
+ * Converts an OpenAI Responses API request body into an Anthropic Messages
+ * request body (responses inbound + anthropic target, the pivot request leg):
+ * `responsesToOpenaiRequest` → `openaiToAnthropicRequest`, so
+ * `reasoning.effort` rides through as `reasoning_effort` and lands as a
+ * thinking budget.
+ */
+export function responsesToAnthropicRequest(
+	body: ResponsesRequest,
+): AnthropicRequest {
+	return openaiToAnthropicRequest(responsesToOpenaiRequest(body));
+}
+
+/**
+ * Converts an Anthropic Messages request body into an OpenAI Responses API
+ * request body (anthropic inbound + responses target, the pivot request leg):
+ * `anthropicToOpenaiRequest` → `openaiToResponsesRequest`.
+ */
+export function anthropicToResponsesRequest(
+	body: AnthropicRequest,
+): ResponsesRequest {
+	return openaiToResponsesRequest(anthropicToOpenaiRequest(body));
+}
+
+/**
+ * Converts an Anthropic Messages API response body into an OpenAI Responses
+ * API response body (responses inbound + anthropic target, non-streaming):
+ * `anthropicToOpenaiResponse` → `openaiToResponsesResponse`. Cache_read
+ * survives via prompt_tokens_details → input_tokens_details; cache_creation
+ * stays folded into the totals (declared loss above).
+ */
+export function anthropicToResponsesResponse(
+	anthropicBody: Record<string, unknown>,
+): ResponsesResponseBody {
+	return openaiToResponsesResponse(anthropicToOpenaiResponse(anthropicBody));
+}
+
+/**
+ * Converts an OpenAI Responses API response body into an Anthropic Messages
+ * API response body (anthropic inbound + responses target, non-streaming):
+ * `responsesToChatResponse` → `openaiToAnthropicResponse`. Usage degrades to
+ * {input_tokens, output_tokens} totals — cache details have no exact
+ * chat→anthropic split (existing convention, no new accounting).
+ */
+export function responsesToAnthropicResponse(
+	responsesBody: ResponsesResponseBody,
+): Record<string, unknown> {
+	return openaiToAnthropicResponse(responsesToChatResponse(responsesBody));
 }
 
 // Developer 角色透传归一化（settings 开关 normalize_developer_role）：

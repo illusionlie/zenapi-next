@@ -479,27 +479,10 @@ describe("OpenAI proxy handler routing matrix (integration)", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("responses inbound + only anthropic channel: 503 no_available_channels, zero upstream fetches", async () => {
-		const fetchMock = vi.fn();
-		vi.stubGlobal("fetch", fetchMock);
-		const { env } = makeEnv([makeChannel({ api_format: "anthropic" })]);
-		const res = await proxyApp.request(
-			"/v1/responses",
-			{
-				method: "POST",
-				headers: {
-					authorization: "Bearer test-token",
-					"content-type": "application/json",
-				},
-				body: JSON.stringify({ model: "test-model", input: "hi" }),
-			},
-			env,
-		);
-		expect(res.status).toBe(503);
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(body.code).toBe("no_available_channels");
-		expect(fetchMock).not.toHaveBeenCalled();
-	});
+	// The former "responses inbound + only anthropic channel → 503" exclusion
+	// flipped in task 10-27-responses-anthropic-pivot: the diagonal edge is now
+	// served via the chat-hub pivot. Full coverage lives in
+	// tests/proxy-pivot.test.ts (non-stream / stream / usage seam / error seam).
 
 	it("non-chat passthrough + only anthropic channel: 503, zero fetches (regression)", async () => {
 		const fetchMock = vi.fn();
@@ -1007,31 +990,10 @@ describe("Anthropic proxy handler routing (integration)", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("anthropic inbound + only responses channel: 503 no_available_channels, zero upstream fetches", async () => {
-		const fetchMock = vi.fn();
-		vi.stubGlobal("fetch", fetchMock);
-		const { env } = makeEnv([makeChannel({ api_format: "responses" })]);
-		const res = await anthropicApp.request(
-			"/messages",
-			{
-				method: "POST",
-				headers: {
-					authorization: "Bearer test-token",
-					"content-type": "application/json",
-				},
-				body: JSON.stringify({
-					model: "test-model",
-					max_tokens: 16,
-					messages: [{ role: "user", content: "hi" }],
-				}),
-			},
-			env,
-		);
-		expect(res.status).toBe(503);
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(body.code).toBe("no_available_channels");
-		expect(fetchMock).not.toHaveBeenCalled();
-	});
+	// The former "anthropic inbound + only responses channel → 503" exclusion
+	// flipped in task 10-27-responses-anthropic-pivot: responses-declared-only
+	// channels now serve anthropic inbound via the chat-hub pivot. Full
+	// coverage lives in tests/proxy-pivot.test.ts.
 
 	it("anthropic inbound + openai channel: still converts via chat completions (regression)", async () => {
 		const fetchMock = vi.fn(async () =>

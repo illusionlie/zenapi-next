@@ -25,7 +25,10 @@ import {
 import {
 	anthropicToOpenaiRequest,
 	createOpenaiToAnthropicStreamTransform,
+	createResponsesToChatStreamTransform,
 	openaiToAnthropicResponse,
+	openaiToResponsesRequest,
+	responsesToAnthropicResponse,
 } from "../services/format-converter";
 import {
 	filterCoolingKeys,
@@ -50,6 +53,7 @@ import { recordUsage } from "../services/usage";
 import {
 	injectSystemPromptAnthropic,
 	injectSystemPromptOpenAI,
+	injectSystemPromptResponses,
 } from "../utils/client-disguise";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
@@ -163,9 +167,10 @@ function selectAnthropicInboundCandidates(
 
 /**
  * Routing matrix step (design.md §3): pick each candidate's target format for
- * the anthropic inbound protocol. responses-declared-only channels are
- * dropped (no responses→anthropic conversion); the target rides on a shallow
- * copy (api_format overridden) so downstream format branches act on it.
+ * the anthropic inbound protocol. Since the responses↔anthropic pivot
+ * (2026-10-27), responses-declared-only channels qualify with target
+ * "responses" (two-hop conversion via the chat hub); the target rides on a
+ * shallow copy (api_format overridden) so downstream format branches act on it.
  */
 function routeAnthropicTargetFormats(
 	candidates: ChannelRecord[],
@@ -269,11 +274,11 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 	}
 
 	// Routing matrix (design.md §3): pick each channel's target format for the
-	// Anthropic inbound protocol. responses-declared-only channels have no
-	// responses→anthropic conversion and are dropped (design.md D2/D5); a
-	// channel declaring ["anthropic","openai"] targets its native anthropic
-	// format. The target rides on a shallow copy (api_format overridden) so
-	// the per-format branches below act on it unchanged.
+	// Anthropic inbound protocol. A channel declaring ["responses"] now targets
+	// its native responses format via the chat-hub pivot (two-hop conversion);
+	// ["anthropic","openai"] still targets native anthropic. The target rides
+	// on a shallow copy (api_format overridden) so the per-format branches
+	// below act on it unchanged.
 	let candidates = routeAnthropicTargetFormats(modelCandidates);
 	if (candidates.length === 0) {
 		return jsonError(c, 503, "no_available_channels", "no_available_channels");
@@ -569,6 +574,112 @@ anthropicProxy.post("/messages", tokenAuth, async (c) => {
 									unknown
 								>;
 								const anthropicData = openaiToAnthropicResponse(openaiData);
+								lastResponse = new Response(JSON.stringify(anthropicData), {
+									status: 200,
+									headers: { "content-type": "application/json" },
+								});
+							}
+							break;
+						}
+					} else if (apiFormat === "responses") {
+						// Responses target (responses↔anthropic pivot): convert
+						// Anthropic → chat → Responses. channelOpenaiBody already
+						// carries the alias-resolved model; the converted Responses
+						// body is fresh per attempt, so preset transform and disguise
+						// injection can mutate it safely (mirrors the openai branch's
+						// copy discipline without an extra shallow copy). The upstream
+						// stream carries its own usage in response.completed — the
+						// chat-only stream_options.include_usage injection does not
+						// apply to this shape.
+						const baseUrl = resolveEndpointBaseUrl(channel, "responses");
+						const target = cfSafeUrl(`${baseUrl}/responses`);
+						const headers = new Headers();
+						headers.set("Authorization", `Bearer ${apiKey}`);
+						headers.set("content-type", "application/json");
+						const responsesBody = channelOpenaiBody
+							? openaiToResponsesRequest(channelOpenaiBody)
+							: {};
+						if (isStream) {
+							(responsesBody as Record<string, unknown>).stream = true;
+						}
+						// 服务端客户端预设：每尝试求值一次；parsedBody 传转换后的
+						// responses 体（实际上游 body）——形状门禁（input）与工具检测
+						// 都作用于它
+						const preset = applyClientPreset(channel.disguise_preset ?? null, {
+							targetFormat: "responses",
+							parsedBody: responsesBody,
+							isStream,
+						});
+						applyHeaderPolicy(
+							headers,
+							headerPolicy,
+							channel.custom_headers_json,
+							channel.disguise_headers_json,
+							preset?.headers,
+						);
+						// 先 transform（工具合规 + 非流强制流式）后注入伪装
+						// （Disguise #7 responses 同款：注入 instructions）
+						if (preset) {
+							preset.transformBody(responsesBody as Record<string, unknown>);
+						}
+						if (disguisePrompt && parsedBody) {
+							injectSystemPromptResponses(
+								responsesBody as Record<string, unknown>,
+								disguisePrompt,
+							);
+						}
+
+						response = await fetch(target, {
+							method: "POST",
+							headers,
+							body: JSON.stringify(responsesBody),
+						});
+						attemptResponse = response;
+						channelLastResponse = response;
+						channelLastAttemptThrew = false;
+
+						if (response.ok) {
+							// Key success (R1): clear this key's cooldown window and
+							// remember it as the serving key for the usage row.
+							recordKeySuccess(channel.id, apiKey);
+							servedKeyFp = lastAttemptKeyFp;
+							selectedChannel = channel;
+							selectedModelName = channelModelName;
+							// Convert Responses response back to Anthropic format:
+							// streaming pipes responses→chat→anthropic transforms in
+							// series (the intermediate chat stream never hits the
+							// wire); non-stream composes the two response legs.
+							if (isStream && response.body) {
+								const transformed = response.body
+									.pipeThrough(createResponsesToChatStreamTransform())
+									.pipeThrough(
+										createOpenaiToAnthropicStreamTransform(
+											effectiveModel ?? "",
+										),
+									);
+								lastResponse = new Response(transformed, {
+									status: 200,
+									headers: {
+										"content-type": "text/event-stream",
+										"cache-control": "no-cache",
+										connection: "keep-alive",
+									},
+								});
+							} else {
+								// 预设强制上游流式（客户端非流，else 分支即 !isStream）：
+								// 上游 SSE 先聚合为 Responses 标准非流对象
+								// （response.completed 直取），再走 responses→chat→
+								// anthropic 非流转换链。聚合器入口 fail-open：上游未真
+								// 流式时原样解析，行为不变。
+								const upstream = isStreamForcingPreset(channel.disguise_preset)
+									? await aggregateUpstreamStream("responses", response)
+									: response;
+								const responsesData = (await upstream.json()) as Record<
+									string,
+									unknown
+								>;
+								const anthropicData =
+									responsesToAnthropicResponse(responsesData);
 								lastResponse = new Response(JSON.stringify(anthropicData), {
 									status: 200,
 									headers: { "content-type": "application/json" },
