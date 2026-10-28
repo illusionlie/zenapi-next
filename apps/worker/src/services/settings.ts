@@ -864,14 +864,94 @@ export async function setProbeIntervalMinutes(
 	await upsertSetting(db, PROBE_INTERVAL_MINUTES_KEY, value.toString());
 }
 
-// Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
-// normalize flag + client rate limits ×2, cached read)
+// Cache token billing ratios (cache read/write price = input_price × ratio;
+// consumed by the post-response billing path in routes/proxy.ts and
+// routes/anthropic-proxy.ts). Born in settings with no env tier.
+
+export const CACHE_READ_RATIO_KEY = "cache_read_ratio";
+export const CACHE_WRITE_RATIO_KEY = "cache_write_ratio";
+export const MIN_CACHE_RATIO = 0;
+export const MAX_CACHE_RATIO = 100;
+export const DEFAULT_CACHE_RATIO = 1;
+
+export type CacheRatioConfig = {
+	/** 缓存读价 = input_price × readRatio（0 = 缓存读免费，合法存储值） */
+	readRatio: number;
+	/** 缓存写价 = input_price × writeRatio（1.25 等小数合法，写倍率可 >1） */
+	writeRatio: number;
+};
 
 /**
- * The seven settings keys the proxy hot path consumes, read in one query:
+ * Parses one cache-ratio settings value: missing / blank / non-numeric /
+ * non-finite / negative input degrades to the default 1 (full input price —
+ * the pre-feature behavior), an in-range or out-of-range non-negative number
+ * is clamped into [0, 100]. Fractions are legal (write ratio 1.25); 0 is a
+ * legal stored value (cache free), not dirt.
+ */
+function parseCacheRatio(raw: string | null | undefined): number {
+	if (raw === null || raw === undefined || raw === "") {
+		return DEFAULT_CACHE_RATIO;
+	}
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return DEFAULT_CACHE_RATIO;
+	}
+	return Math.min(MAX_CACHE_RATIO, parsed);
+}
+
+/**
+ * Pure resolver for the cache-ratio pair. Kept DB-free so the post-response
+ * billing paths re-evaluate it on every call against the
+ * loadProxySettingsCached snapshot.
+ */
+export function resolveCacheRatioConfig(raw: SettingsRawMap): CacheRatioConfig {
+	return {
+		readRatio: parseCacheRatio(raw[CACHE_READ_RATIO_KEY] ?? null),
+		writeRatio: parseCacheRatio(raw[CACHE_WRITE_RATIO_KEY] ?? null),
+	};
+}
+
+/**
+ * Uncached read for the admin settings form ("admin form truth", same
+ * contract as loadRateLimitConfigDirect): a PUT followed by a GET on the
+ * same isolate must observe the new value immediately. The billing paths
+ * read the same keys through loadProxySettingsCached (30s staleness bound).
+ */
+export async function loadCacheRatioConfigDirect(
+	db: D1Database,
+): Promise<CacheRatioConfig> {
+	const raw = await readSettingsRawMap(db, [
+		CACHE_READ_RATIO_KEY,
+		CACHE_WRITE_RATIO_KEY,
+	]);
+	return resolveCacheRatioConfig(raw);
+}
+
+/** Updates the cache-read ratio setting (write-side strict validation; the
+ * PUT route rejects non-numeric / negative / out-of-range before this). */
+export async function setCacheReadRatio(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, CACHE_READ_RATIO_KEY, value.toString());
+}
+
+/** Updates the cache-write ratio setting (same write contract). */
+export async function setCacheWriteRatio(
+	db: D1Database,
+	value: number,
+): Promise<void> {
+	await upsertSetting(db, CACHE_WRITE_RATIO_KEY, value.toString());
+}
+
+// Proxy runtime settings snapshot (header policy ×2 + retry ×2 + developer
+// normalize flag + client rate limits ×2 + cache billing ratios ×2, cached read)
+
+/**
+ * The nine settings keys the proxy hot path consumes, read in one query:
  * global header policy (extra/remove) + retry config (rounds/delay) + the
  * developer-role normalization flag + the client rate-limit pair
- * (token RPM default, IP auth-failure limit).
+ * (token RPM default, IP auth-failure limit) + the cache billing ratio pair.
  */
 export const PROXY_SETTING_KEYS = [
 	PROXY_EXTRA_HEADERS_KEY,
@@ -881,6 +961,8 @@ export const PROXY_SETTING_KEYS = [
 	DEVELOPER_NORMALIZE_ROLE_KEY,
 	TOKEN_RPM_DEFAULT_KEY,
 	IP_AUTH_FAIL_LIMIT_KEY,
+	CACHE_READ_RATIO_KEY,
+	CACHE_WRITE_RATIO_KEY,
 ] as const;
 
 const PROXY_SETTINGS_CACHE_KEY = "proxy";

@@ -247,3 +247,28 @@ parseUsageFromSse(lastResponse.clone(), start) // 请求起点透传（epoch ms�
 // 首条 data 行：firstTokenLatencyMs = now - start（含重试/换渠道）
 // 流尾：elapsedMs = now - start → 第三参覆盖 latency_ms
 ```
+
+## 11. 计费公式口径（2026-10-28 缓存折价增补）
+
+### 11.1 Scope / Trigger
+
+- 触发：改动 `calculateCost` 签名 / cost 公式 / 定价解析（`services/pricing.ts` + `services/channel-models.ts`）。
+
+### 11.2 Signatures
+
+```ts
+// services/pricing.ts
+calculateCost(price, prompt, completion, total?, cachedInput?, cacheCreation?, ratios?): number;
+// ratios: { readRatio, writeRatio }（resolveCacheRatioConfig，clamp [0,100] 脏值降 1）
+// price.cache_read_price / cache_write_price：每模型绝对价覆盖（Number(x) > 0 解析约定）
+```
+
+### 11.3 Contracts
+
+- cost = `非缓存 × input_price + 缓存读 × 读价 + 缓存写 × 写价 + 输出 × output_price`；非缓存输入 = `max(0, prompt − cacheRead − cacheWrite)`（cached ⊆ prompt 口径承继 §3.2 折算链，负余量钳制兜底异常上游）。
+- **双零短路守卫**：cacheRead/cacheWrite 同时为 0（含 NULL）→ 原公式原路径逐字节返回（usage 行 NULL = 上游未报告，不猜测不折算）；`totalTokens`-only 均值价回退在前且不变、缓存不拆分。
+- `getModelPrice` 无定价判定维持 input/output 双 null → null；cache-only 条目不是定价。倍率走 `loadProxySettingsCached` 30s TTL（post-response 路径，计费生效窗口 ≤30s）；调用方恰好 proxy `record` / anthropic-proxy `recordFn` 两处。
+
+### 11.4 Tests Required
+
+`tests/cache-token-billing.test.ts`：公式矩阵（读/写/混合/NULL 短路/倍率覆盖/绝对价覆盖/负余量钳制/totalTokens 回退）、零回归对照（legacy 参照 toBe 严格浮点相等）、settings clamp 与 PUT 校验矩阵、models prices PUT 三态、含 cache 字段 models_json 备份 round-trip。

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { D1Database } from "@cloudflare/workers-types";
 import {
+	CACHE_READ_RATIO_KEY,
+	CACHE_WRITE_RATIO_KEY,
 	DEFAULT_PROXY_RETRY_DELAY_MS,
 	DEFAULT_PROXY_RETRY_ROUNDS,
 	DEVELOPER_NORMALIZE_ROLE_KEY,
@@ -95,7 +97,7 @@ describe("loadProxySettingsCached", () => {
 		expect(b.prepareCount()).toBe(1);
 	});
 
-	it("reads all seven proxy keys in a single query", async () => {
+	it("reads all nine proxy keys in a single query", async () => {
 		let boundKeys: string[] = [];
 		const db = {
 			prepare: (sql: string) => {
@@ -120,6 +122,8 @@ describe("loadProxySettingsCached", () => {
 			DEVELOPER_NORMALIZE_ROLE_KEY,
 			TOKEN_RPM_DEFAULT_KEY,
 			IP_AUTH_FAIL_LIMIT_KEY,
+			CACHE_READ_RATIO_KEY,
+			CACHE_WRITE_RATIO_KEY,
 		]);
 	});
 });

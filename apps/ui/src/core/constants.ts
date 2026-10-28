@@ -120,6 +120,8 @@ export const initialSettingsForm: SettingsForm = {
 	alert_min_samples: "5",
 	alert_silence_minutes: "30",
 	alert_window_minutes: "15",
+	cache_read_ratio: "1",
+	cache_write_ratio: "1",
 	daily_report_enabled: "false",
 	normalize_developer_role: "false",
 	model_test_prompt: "",

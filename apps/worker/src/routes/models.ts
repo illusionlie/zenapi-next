@@ -22,6 +22,8 @@ type ChannelInfo = {
 	name: string;
 	input_price: number | null;
 	output_price: number | null;
+	cache_read_price: number | null;
+	cache_write_price: number | null;
 	avg_latency_ms: number | null;
 };
 
@@ -36,6 +38,13 @@ type ModelResult = {
 	total_cost: number;
 	avg_latency_ms: number | null;
 	daily: DailyUsage[];
+};
+
+type ChannelPrice = {
+	input_price: number | null;
+	output_price: number | null;
+	cache_read_price: number | null;
+	cache_write_price: number | null;
 };
 
 /**
@@ -57,10 +66,7 @@ function computeEffectiveMapping(
 		string,
 		Map<string, { aliases: string[]; alias_only: boolean }>
 	>,
-	pricingMap: Map<
-		string,
-		Map<string, { input_price: number | null; output_price: number | null }>
-	>,
+	pricingMap: Map<string, Map<string, ChannelPrice>>,
 ): Map<
 	string,
 	{
@@ -72,6 +78,8 @@ function computeEffectiveMapping(
 				name: string;
 				input_price: number | null;
 				output_price: number | null;
+				cache_read_price: number | null;
+				cache_write_price: number | null;
 			}
 		>;
 	}
@@ -87,6 +95,8 @@ function computeEffectiveMapping(
 					name: string;
 					input_price: number | null;
 					output_price: number | null;
+					cache_read_price: number | null;
+					cache_write_price: number | null;
 				}
 			>;
 		}
@@ -115,6 +125,8 @@ function computeEffectiveMapping(
 				name: channel.name,
 				input_price: pricing?.input_price ?? null,
 				output_price: pricing?.output_price ?? null,
+				cache_read_price: pricing?.cache_read_price ?? null,
+				cache_write_price: pricing?.cache_write_price ?? null,
 			};
 
 			// Original name routes to this channel (unless alias_only)
@@ -143,20 +155,16 @@ models.get("/", async (c) => {
 	const channels = await listActiveChannels(c.env.DB);
 
 	// Build per-channel pricing maps
-	const pricingMap = new Map<
-		string,
-		Map<string, { input_price: number | null; output_price: number | null }>
-	>();
+	const pricingMap = new Map<string, Map<string, ChannelPrice>>();
 	for (const channel of channels) {
 		const pricings = extractModelPricings(channel);
-		const modelPriceMap = new Map<
-			string,
-			{ input_price: number | null; output_price: number | null }
-		>();
+		const modelPriceMap = new Map<string, ChannelPrice>();
 		for (const p of pricings) {
 			modelPriceMap.set(p.id, {
 				input_price: p.input_price ?? null,
 				output_price: p.output_price ?? null,
+				cache_read_price: p.cache_read_price ?? null,
+				cache_write_price: p.cache_write_price ?? null,
 			});
 		}
 		pricingMap.set(channel.id, modelPriceMap);
@@ -321,6 +329,20 @@ models.put("/prices/:modelId", async (c) => {
 			item.output_price != null
 				? Number(item.output_price)
 				: entry.output_price;
+		// cache 字段三态：undefined 保留现值 / null 清除（回落全局倍率）/ 数字设置
+		//（清除态置 undefined，modelsToJson 对 != null 才序列化，落库即缺省）
+		if (item.cache_read_price !== undefined) {
+			entry.cache_read_price =
+				item.cache_read_price === null
+					? undefined
+					: Number(item.cache_read_price);
+		}
+		if (item.cache_write_price !== undefined) {
+			entry.cache_write_price =
+				item.cache_write_price === null
+					? undefined
+					: Number(item.cache_write_price);
+		}
 
 		const updatedJson = modelsToJson(pricings);
 		stmts.push(

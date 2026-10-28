@@ -775,6 +775,62 @@ export const SettingsView = ({
 							关闭。
 						</p>
 					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="cache-read-ratio"
+						>
+							缓存读价倍率
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="cache-read-ratio"
+							name="cache_read_ratio"
+							type="number"
+							min="0"
+							max="100"
+							step="0.01"
+							value={settingsForm.cache_read_ratio}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									cache_read_ratio: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							缓存读 token 价格 = 输入价 × 此倍率（1 = 全价，0.1 模拟 Anthropic
+							缓存读折价，0 = 免费），范围 0–100。模型可配置绝对价覆盖。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="cache-write-ratio"
+						>
+							缓存写价倍率
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="cache-write-ratio"
+							name="cache_write_ratio"
+							type="number"
+							min="0"
+							max="100"
+							step="0.01"
+							value={settingsForm.cache_write_ratio}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									cache_write_ratio: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							缓存写 token 价格 = 输入价 × 此倍率（1 = 全价，1.25 模拟 Anthropic
+							缓存写溢价），范围 0–100。变更生效延迟 ≤30 秒。
+						</p>
+					</div>
 					<div class="lg:col-span-2">
 						<label
 							class="flex cursor-pointer items-center gap-2.5 text-sm text-stone-700"

@@ -263,6 +263,9 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			alert_min_samples: String(settings.alert_min_samples ?? 5),
 			alert_silence_minutes: String(settings.alert_silence_minutes ?? 30),
 			alert_window_minutes: String(settings.alert_window_minutes ?? 15),
+			// 缓存折价倍率两键(GET 返回 clamp 后有效值,缺失回退 1 = 全价)
+			cache_read_ratio: String(settings.cache_read_ratio ?? 1),
+			cache_write_ratio: String(settings.cache_write_ratio ?? 1),
 			daily_report_enabled: settings.daily_report_enabled ? "true" : "false",
 			normalize_developer_role: settings.normalize_developer_role
 				? "true"
@@ -751,6 +754,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				alert_min_samples: Number(settingsForm.alert_min_samples),
 				alert_silence_minutes: Number(settingsForm.alert_silence_minutes),
 				alert_window_minutes: Number(settingsForm.alert_window_minutes),
+				cache_read_ratio: Number(settingsForm.cache_read_ratio),
+				cache_write_ratio: Number(settingsForm.cache_write_ratio),
 				daily_report_enabled: settingsForm.daily_report_enabled === "true",
 				normalize_developer_role:
 					settingsForm.normalize_developer_role === "true",
@@ -1317,6 +1322,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 				channel_id: string;
 				input_price: number;
 				output_price: number;
+				cache_read_price: number | null;
+				cache_write_price: number | null;
 			}>,
 		) => {
 			try {

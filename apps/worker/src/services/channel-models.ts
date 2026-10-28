@@ -5,6 +5,10 @@ export type ModelPricing = {
 	id: string;
 	input_price?: number; // per million tokens, USD
 	output_price?: number; // per million tokens, USD
+	/** 缓存读绝对价覆盖（USD/1M）；缺省回落全局 cache_read_ratio */
+	cache_read_price?: number;
+	/** 缓存写绝对价覆盖（USD/1M）；缺省回落全局 cache_write_ratio */
+	cache_write_price?: number;
 	enabled?: boolean; // undefined/true = enabled, false = disabled
 };
 
@@ -21,6 +25,8 @@ type ModelLike = {
 	id?: unknown;
 	input_price?: unknown;
 	output_price?: unknown;
+	cache_read_price?: unknown;
+	cache_write_price?: unknown;
 	enabled?: unknown;
 };
 
@@ -74,6 +80,12 @@ export function modelsToJson(models: string[] | ModelPricing[]): string {
 			const entry: ModelPricing = { id: m.id };
 			if (m.input_price != null) entry.input_price = m.input_price;
 			if (m.output_price != null) entry.output_price = m.output_price;
+			if (m.cache_read_price != null) {
+				entry.cache_read_price = m.cache_read_price;
+			}
+			if (m.cache_write_price != null) {
+				entry.cache_write_price = m.cache_write_price;
+			}
 			if (m.enabled != null) entry.enabled = m.enabled;
 			return entry;
 		}),
@@ -124,9 +136,17 @@ export function extractModelPricings(
 			if (model && typeof model === "object") {
 				const ip = (model as ModelLike).input_price;
 				const op = (model as ModelLike).output_price;
+				const crp = (model as ModelLike).cache_read_price;
+				const cwp = (model as ModelLike).cache_write_price;
 				const en = (model as ModelLike).enabled;
 				if (ip != null && Number(ip) > 0) entry.input_price = Number(ip);
 				if (op != null && Number(op) > 0) entry.output_price = Number(op);
+				if (crp != null && Number(crp) > 0) {
+					entry.cache_read_price = Number(crp);
+				}
+				if (cwp != null && Number(cwp) > 0) {
+					entry.cache_write_price = Number(cwp);
+				}
 				if (en != null) entry.enabled = Boolean(en);
 			}
 			return entry;

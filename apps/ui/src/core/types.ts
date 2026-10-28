@@ -299,6 +299,10 @@ export type Settings = {
 	daily_report_enabled: boolean;
 	/** 渠道主动探测间隔分钟数(0 = 总闸关闭,默认 30) */
 	probe_interval_minutes?: number;
+	/** 缓存读价倍率(缓存读价 = input_price × 倍率,默认 1 = 全价) */
+	cache_read_ratio: number;
+	/** 缓存写价倍率(缓存写价 = input_price × 倍率,默认 1 = 全价) */
+	cache_write_ratio: number;
 	/** developer 角色透传归一化开关（默认关闭） */
 	normalize_developer_role: boolean;
 	model_test_prompt: string;
@@ -313,6 +317,10 @@ export type ModelChannel = {
 	name: string;
 	input_price: number | null;
 	output_price: number | null;
+	/** 每模型缓存读绝对价覆盖（null = 未配置，跟随全局倍率） */
+	cache_read_price: number | null;
+	/** 每模型缓存写绝对价覆盖（null = 未配置，跟随全局倍率） */
+	cache_write_price: number | null;
 	avg_latency_ms: number | null;
 };
 
@@ -425,6 +433,10 @@ export type SettingsForm = {
 	alert_silence_minutes: string;
 	/** 失败率评估窗口(分钟),数值字段以 string 承接 input */
 	alert_window_minutes: string;
+	/** 缓存读价倍率(默认 1 = 全价;0 = 缓存读免费),数值字段以 string 承接 input */
+	cache_read_ratio: string;
+	/** 缓存写价倍率(默认 1 = 全价;1.25 等小数合法),数值字段以 string 承接 input */
+	cache_write_ratio: string;
 	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
 	daily_report_enabled: string;
 	/** "true" / "false" 直传后端（服务端仅接受严格布尔） */
@@ -523,6 +535,10 @@ export type PublicModelItem = {
 		name: string;
 		input_price: number | null;
 		output_price: number | null;
+		/** 每模型缓存读绝对价覆盖（null = 未配置，跟随全局倍率） */
+		cache_read_price: number | null;
+		/** 每模型缓存写绝对价覆盖（null = 未配置，跟随全局倍率） */
+		cache_write_price: number | null;
 	}>;
 };
 

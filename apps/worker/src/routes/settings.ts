@@ -19,6 +19,7 @@ import {
 	getTurnstileConfig,
 	isAdminPasswordSet,
 	loadAlertConfigDirect,
+	loadCacheRatioConfigDirect,
 	loadDailyReportFlagDirect,
 	loadDebugLogFlagDirect,
 	loadDeveloperNormalizeFlagDirect,
@@ -29,6 +30,7 @@ import {
 	MAX_ALERT_MIN_SAMPLES,
 	MAX_ALERT_SILENCE_MINUTES,
 	MAX_ALERT_WINDOW_MINUTES,
+	MAX_CACHE_RATIO,
 	MAX_PROBE_INTERVAL_MINUTES,
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
@@ -37,6 +39,7 @@ import {
 	MIN_ALERT_MIN_SAMPLES,
 	MIN_ALERT_SILENCE_MINUTES,
 	MIN_ALERT_WINDOW_MINUTES,
+	MIN_CACHE_RATIO,
 	MIN_PROBE_INTERVAL_MINUTES,
 	MIN_PROXY_RETRY_DELAY_MS,
 	MIN_PROXY_RETRY_ROUNDS,
@@ -48,6 +51,8 @@ import {
 	setAlertSilenceMinutes,
 	setAlertWindowMinutes,
 	setAnnouncement,
+	setCacheReadRatio,
+	setCacheWriteRatio,
 	setCheckinReward,
 	setDailyReportFlag,
 	setDebugRequestBodyLog,
@@ -119,6 +124,8 @@ settings.get("/", async (c) => {
 	const dailyReportEnabled = await loadDailyReportFlagDirect(c.env.DB);
 	// 主动探测间隔同契约：直读 clamp 后有效值（调度器走 */10 cron；0 = 总闸关闭）
 	const probeIntervalMinutes = await loadProbeIntervalMinutesDirect(c.env.DB);
+	// 缓存折价倍率两键同契约：直读 clamp 后有效值（计费热路径走 30s 缓存快照）
+	const cacheRatioConfig = await loadCacheRatioConfigDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -147,6 +154,9 @@ settings.get("/", async (c) => {
 		alert_window_minutes: alertConfig.windowMinutes,
 		daily_report_enabled: dailyReportEnabled,
 		probe_interval_minutes: probeIntervalMinutes,
+		// 缓存折价倍率两键（表单即真相：clamp 后有效值，缺失 = 1 = 全价）
+		cache_read_ratio: cacheRatioConfig.readRatio,
+		cache_write_ratio: cacheRatioConfig.writeRatio,
 		model_test_prompt: modelTestPrompt,
 		debug_request_body_log: debugRequestBodyLog,
 		normalize_developer_role: normalizeDeveloperRole,
@@ -487,6 +497,45 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setProbeIntervalMinutes(c.env.DB, interval);
+		touched = true;
+	}
+
+	// 缓存折价倍率两键：写侧严格校验（有限非负数字且 ≤ 100，小数合法——
+	// 写倍率 1.25；非法/越界 400），读侧 clamp [0,100] / 脏值降 1 在
+	// resolveCacheRatioConfig——两级形态，无 env 层
+	if (body.cache_read_ratio !== undefined) {
+		const ratio = Number(body.cache_read_ratio);
+		if (
+			!Number.isFinite(ratio) ||
+			ratio < MIN_CACHE_RATIO ||
+			ratio > MAX_CACHE_RATIO
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_cache_read_ratio",
+				"invalid_cache_read_ratio",
+			);
+		}
+		await setCacheReadRatio(c.env.DB, ratio);
+		touched = true;
+	}
+
+	if (body.cache_write_ratio !== undefined) {
+		const ratio = Number(body.cache_write_ratio);
+		if (
+			!Number.isFinite(ratio) ||
+			ratio < MIN_CACHE_RATIO ||
+			ratio > MAX_CACHE_RATIO
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_cache_write_ratio",
+				"invalid_cache_write_ratio",
+			);
+		}
+		await setCacheWriteRatio(c.env.DB, ratio);
 		touched = true;
 	}
 

@@ -55,6 +55,8 @@ publicRoutes.get("/models", async (c) => {
 		name: string;
 		input_price: number | null;
 		output_price: number | null;
+		cache_read_price: number | null;
+		cache_write_price: number | null;
 	};
 	const effectiveMap = new Map<
 		string,
@@ -73,6 +75,8 @@ publicRoutes.get("/models", async (c) => {
 				name: channel.name,
 				input_price: p.input_price ?? null,
 				output_price: p.output_price ?? null,
+				cache_read_price: p.cache_read_price ?? null,
+				cache_write_price: p.cache_write_price ?? null,
 			};
 
 			// Original name (unless alias_only)

@@ -54,6 +54,7 @@ import {
 import { calculateCost, getModelPrice } from "../services/pricing";
 import {
 	loadProxySettingsCached,
+	resolveCacheRatioConfig,
 	resolveDeveloperNormalizeFlag,
 	resolveProxyRetryConfig,
 } from "../services/settings";
@@ -1217,6 +1218,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 			channelForUsage.models_json,
 			selectedModelName ?? "",
 		);
+		// 缓存折价倍率：与重试/限流同源（loadProxySettingsCached 快照纯解析，
+		// 生效陈旧窗口 ≤30s）；record 闭包计费时消费
+		const cacheRatios = resolveCacheRatioConfig(proxySettings);
 		let errorCode: number | null = null;
 		let errorMessage: string | null = null;
 		if (!lastResponse.ok) {
@@ -1249,6 +1253,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 						normalized.promptTokens,
 						normalized.completionTokens,
 						normalized.totalTokens,
+						normalized.cachedInputTokens,
+						normalized.cacheCreationTokens,
+						cacheRatios,
 					)
 				: 0;
 			const resolvedFirstTokenLatencyMs =

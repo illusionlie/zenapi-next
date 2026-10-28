@@ -82,6 +82,22 @@ export const UserModelsView = ({ models }: UserModelsViewProps) => {
 																	{formatPrice(ch.output_price)}
 																</span>
 																<span class="ml-1 text-stone-400">/1M</span>
+																{ch.cache_read_price != null && (
+																	<span class="ml-1.5 text-stone-400">
+																		缓存读{" "}
+																		<span class="text-teal-600">
+																			{formatPrice(ch.cache_read_price)}
+																		</span>
+																	</span>
+																)}
+																{ch.cache_write_price != null && (
+																	<span class="ml-1.5 text-stone-400">
+																		缓存写{" "}
+																		<span class="text-orange-600">
+																			{formatPrice(ch.cache_write_price)}
+																		</span>
+																	</span>
+																)}
 															</>
 														) : (
 															<span class="text-stone-300">未设置</span>

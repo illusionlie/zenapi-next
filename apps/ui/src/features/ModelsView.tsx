@@ -17,6 +17,8 @@ type ModelsViewProps = {
 			channel_id: string;
 			input_price: number;
 			output_price: number;
+			cache_read_price: number | null;
+			cache_write_price: number | null;
 		}>,
 	) => Promise<void>;
 };
@@ -159,6 +161,22 @@ const ModelCard = ({
 												{formatPrice(ch.output_price)}
 											</span>
 											<span class="ml-1 text-stone-400">/1M</span>
+											{ch.cache_read_price != null && (
+												<span class="ml-1.5 text-stone-400">
+													缓存读{" "}
+													<span class="text-teal-600">
+														{formatPrice(ch.cache_read_price)}
+													</span>
+												</span>
+											)}
+											{ch.cache_write_price != null && (
+												<span class="ml-1.5 text-stone-400">
+													缓存写{" "}
+													<span class="text-orange-600">
+														{formatPrice(ch.cache_write_price)}
+													</span>
+												</span>
+											)}
 										</>
 									) : (
 										<span class="text-stone-300">未设置</span>
@@ -389,12 +407,16 @@ const PriceEditModal = ({
 		name: string;
 		input_price: number | null;
 		output_price: number | null;
+		cache_read_price: number | null;
+		cache_write_price: number | null;
 	}>;
 	onSave: (
 		prices: Array<{
 			channel_id: string;
 			input_price: number;
 			output_price: number;
+			cache_read_price: number | null;
+			cache_write_price: number | null;
 		}>,
 	) => Promise<void>;
 	onClose: () => void;
@@ -405,6 +427,10 @@ const PriceEditModal = ({
 			name: ch.name,
 			input_price: ch.input_price != null ? String(ch.input_price) : "",
 			output_price: ch.output_price != null ? String(ch.output_price) : "",
+			cache_read_price:
+				ch.cache_read_price != null ? String(ch.cache_read_price) : "",
+			cache_write_price:
+				ch.cache_write_price != null ? String(ch.cache_write_price) : "",
 		})),
 	);
 	const [batchInput, setBatchInput] = useState("");
@@ -439,7 +465,11 @@ const PriceEditModal = ({
 
 	const handleFieldChange = (
 		index: number,
-		field: "input_price" | "output_price",
+		field:
+			| "input_price"
+			| "output_price"
+			| "cache_read_price"
+			| "cache_write_price",
 		value: string,
 	) => {
 		setPrices((prev) =>
@@ -464,6 +494,11 @@ const PriceEditModal = ({
 				channel_id: p.channel_id,
 				input_price: p.input_price !== "" ? Number(p.input_price) : 0,
 				output_price: p.output_price !== "" ? Number(p.output_price) : 0,
+				// 空串 = 清除（null → 回落全局倍率）；有值 = 设置绝对价
+				cache_read_price:
+					p.cache_read_price !== "" ? Number(p.cache_read_price) : null,
+				cache_write_price:
+					p.cache_write_price !== "" ? Number(p.cache_write_price) : null,
 			}));
 			await onSave(payload);
 			handleClose();
@@ -496,15 +531,17 @@ const PriceEditModal = ({
 			</div>
 
 			<div class="mt-4 space-y-2">
-				<div class="grid grid-cols-[1fr_5rem_5rem] gap-2 text-xs font-medium text-stone-400">
+				<div class="grid grid-cols-[1fr_4rem_4rem_4rem_4rem] gap-2 text-xs font-medium text-stone-400">
 					<span>渠道</span>
-					<span class="text-center">输入价格</span>
-					<span class="text-center">输出价格</span>
+					<span class="text-center">输入价</span>
+					<span class="text-center">输出价</span>
+					<span class="text-center">缓存读</span>
+					<span class="text-center">缓存写</span>
 				</div>
 				{prices.map((p, index) => (
 					<div
 						key={p.channel_id}
-						class="grid grid-cols-[1fr_5rem_5rem] items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2"
+						class="grid grid-cols-[1fr_4rem_4rem_4rem_4rem] items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2"
 					>
 						<span class="truncate text-sm text-stone-700">{p.name}</span>
 						<input
@@ -533,8 +570,39 @@ const PriceEditModal = ({
 								)
 							}
 						/>
+						<input
+							type="number"
+							step="any"
+							placeholder="全局"
+							class="w-full rounded-md border border-stone-200 bg-white px-2 py-1 text-center text-sm text-stone-900 placeholder:text-stone-300 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							value={p.cache_read_price}
+							onInput={(e) =>
+								handleFieldChange(
+									index,
+									"cache_read_price",
+									(e.currentTarget as HTMLInputElement)?.value ?? "",
+								)
+							}
+						/>
+						<input
+							type="number"
+							step="any"
+							placeholder="全局"
+							class="w-full rounded-md border border-stone-200 bg-white px-2 py-1 text-center text-sm text-stone-900 placeholder:text-stone-300 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							value={p.cache_write_price}
+							onInput={(e) =>
+								handleFieldChange(
+									index,
+									"cache_write_price",
+									(e.currentTarget as HTMLInputElement)?.value ?? "",
+								)
+							}
+						/>
 					</div>
 				))}
+				<p class="text-xs text-stone-400">
+					缓存读/写留空 = 跟随系统设置的缓存倍率；填写则按绝对价（USD/1M）覆盖。
+				</p>
 			</div>
 
 			<div class="mt-4 rounded-lg border border-dashed border-stone-300 bg-stone-50 p-3">
