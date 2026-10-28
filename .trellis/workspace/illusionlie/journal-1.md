@@ -742,3 +742,25 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: 缓存 token 折价计费落地 + CPA/NewAPI 批次立项
+
+**Date**: 2026-10-28
+**Task**: 缓存 token 折价计费落地 + CPA/NewAPI 批次立项
+**Branch**: `main`
+
+### Summary
+
+对比 CLIProxyAPI/NewAPI 后拍板成立 10-28-cpa-newapi-adoption-batch（1 实施 + 3 设计评估）。实施项 cache-token-billing 全流程走完：全局倍率（cache_read/write_ratio，默认 1 零回归）+ models_json 每模型绝对价覆盖；实施子代理配额中断留半成品，续做代理修 6 个测试侧失败（boundKeys 7→9 + mock 缺 .sql），check 六维度全过并修 2 处 UI 条件渲染；主会话亲跑门禁 966/966 全绿；spec 更新已完备（usage-accounting §11 + settings-config 小数倍率形态）。教训补充：commit hook 署名 trailer 值随模型变（GLM-5.3-Flash），add+commit 必须同命令。后续：gemini/admin-2fa/sensitive-word 三份评估报告待产出。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f81de80` | (see git log) |
+| `3f1f373` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-10-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~744 | Active |
+| `journal-1.md` | ~766 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-10-28 | 缓存 token 折价计费落地 + CPA/NewAPI 批次立项 | `f81de80`, `3f1f373` | `main` |
 | 21 | 2026-10-28 | responses↔anthropic pivot 转换与流式存量缺口修复 | `19965cb`, `0c2652b`, `ac34eaf`, `6bd3514`, `a8f2796`, `1d94f5c` | `main` |
 | 20 | 2026-10-23 | 流式延迟口径修复：TTFT 锚定请求起点 + latency_ms 含流时长 | `517c6b1`, `e732ead`, `f196758` | `main` |
 | 19 | 2026-10-22 | OpenCode Zen 免费额度真身伪装：服务端预设引擎落地并实测通过 | `6b89caa`, `227e5e6`, `cbf0c9a`, `57411ab`, `91b8aac` | `main` |
