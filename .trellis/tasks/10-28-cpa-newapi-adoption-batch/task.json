@@ -1,0 +1,31 @@
+{
+	"id": "cpa-newapi-adoption-batch",
+	"name": "cpa-newapi-adoption-batch",
+	"title": "对比调研采纳批次：CPA/NewAPI",
+	"description": "",
+	"status": "planning",
+	"dev_type": null,
+	"scope": null,
+	"package": null,
+	"priority": "P2",
+	"creator": "illusionlie",
+	"assignee": "illusionlie",
+	"createdAt": "2026-10-28",
+	"completedAt": null,
+	"branch": null,
+	"base_branch": "main",
+	"worktree_path": null,
+	"commit": null,
+	"pr_url": null,
+	"subtasks": [],
+	"children": [
+		"10-28-gemini-native-protocol",
+		"10-28-admin-2fa",
+		"10-28-sensitive-word-filter",
+		"10-28-cache-token-billing"
+	],
+	"parent": null,
+	"relatedFiles": [],
+	"notes": "",
+	"meta": {}
+}

@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "计费与 usage 既有口径：prompt 含缓存总输入、recordUsage 原子性、缓存列语义"}
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "settings 两级读取链、严格校验与 PROXY_SETTING_KEYS 模式，新增两键照此"}
+{"file": ".trellis/spec/api-worker/backend/database-guidelines.md", "reason": "JSON 列与无迁移改动约定"}
+{"file": ".trellis/spec/api-worker/frontend/index.md", "reason": "UI 层规范入口（定价编辑器与系统设置表单）"}
