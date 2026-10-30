@@ -1,4 +1,5 @@
 import type { TabId, TabItem } from "../core/types";
+import { BrandMark } from "./BrandMark";
 
 type AppLayoutProps = {
 	tabs: TabItem[];
@@ -67,7 +68,7 @@ export const AppLayout = ({
 				class="font-['Space_Grotesk'] text-sm font-semibold tracking-tight text-stone-900"
 				onClick={() => onNavigate("/")}
 			>
-				ZenAPI
+				<BrandMark size="sm" />
 			</button>
 			<div class="w-10" />
 		</div>
@@ -98,7 +99,7 @@ export const AppLayout = ({
 						class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900 text-left"
 						onClick={() => onNavigate("/")}
 					>
-						ZenAPI
+						<BrandMark size="md" />
 					</button>
 					<span class="text-xs uppercase tracking-widest text-stone-500">
 						console
@@ -142,7 +143,7 @@ export const AppLayout = ({
 					class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900 text-left"
 					onClick={() => onNavigate("/")}
 				>
-					ZenAPI
+					<BrandMark size="md" />
 				</button>
 				<span class="text-xs uppercase tracking-widest text-stone-500">
 					console

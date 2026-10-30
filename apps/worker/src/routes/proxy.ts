@@ -303,7 +303,7 @@ export function buildChannelRequest(
 		let target: string;
 		let body: string | undefined;
 		if (lower.startsWith("/v1/responses")) {
-			// Responses inbound: pass through untouched (R4) — ZenAPI does not
+			// Responses inbound: pass through untouched (R4) — ZenAPI Next does not
 			// interpret store / previous_response_id etc.; state lives upstream.
 			// Disguise prompt (#4, design §3.1) still injects into `instructions`
 			// via a per-call shallow copy so the caller's parsed body stays

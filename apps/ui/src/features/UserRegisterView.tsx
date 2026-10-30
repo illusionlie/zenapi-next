@@ -1,5 +1,6 @@
 import { useState } from "hono/jsx/dom";
 import type { RegistrationMode } from "../core/types";
+import { BrandMark } from "./BrandMark";
 import { Turnstile } from "./Turnstile";
 
 type UserRegisterViewProps = {
@@ -75,7 +76,7 @@ export const UserRegisterView = ({
 						class="mb-2 font-['Space_Grotesk'] text-2xl tracking-tight text-stone-900"
 						onClick={() => onNavigate("/")}
 					>
-						ZenAPI
+						<BrandMark size="lg" />
 					</button>
 					<p class="text-sm text-stone-500">注册已关闭，暂不接受新用户注册。</p>
 					<p class="mt-4 text-center text-sm text-stone-500">
@@ -102,7 +103,7 @@ export const UserRegisterView = ({
 						class="mb-2 font-['Space_Grotesk'] text-2xl tracking-tight text-stone-900"
 						onClick={() => onNavigate("/")}
 					>
-						ZenAPI
+						<BrandMark size="lg" />
 					</button>
 					<p class="text-sm text-stone-500">仅支持通过 Linux DO 注册。</p>
 					{linuxdoEnabled && (
@@ -179,7 +180,7 @@ export const UserRegisterView = ({
 					class="mb-2 font-['Space_Grotesk'] text-2xl tracking-tight text-stone-900"
 					onClick={() => onNavigate("/")}
 				>
-					ZenAPI
+					<BrandMark size="lg" />
 				</button>
 				<p class="text-sm text-stone-500">创建新账户。</p>
 				<form class="mt-6 grid gap-4" onSubmit={handleSubmit}>

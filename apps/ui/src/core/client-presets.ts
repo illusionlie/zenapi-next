@@ -599,7 +599,7 @@ export const CLIENT_PRESETS: ClientPreset[] = [
 		},
 		systemPrompt: CODEX_PROMPT,
 		note:
-			"官方源码锚定（openai/codex rust-v0.154.0 回退主指令，正是 ZenAPI 自定义 provider 命中的版本）。" +
+			"官方源码锚定（openai/codex rust-v0.154.0 回退主指令，正是 ZenAPI Next 自定义 provider 命中的版本）。" +
 			"本机未安装，UA 终端段 Windows Terminal 为快照猜测（真实值随用户终端变化）；session-id / thread-id / x-client-request-id（每次请求 uuid）省略——指纹存在未验证环节，故标「测试」。",
 		testing: true,
 	},

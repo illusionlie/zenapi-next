@@ -186,7 +186,7 @@ describe("GET /api/backup/export", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers.get("cache-control")).toBe("no-store");
 		expect(res.headers.get("content-disposition")).toMatch(
-			/^attachment; filename="zenapi-backup-\d{4}-\d{2}-\d{2}\.json"$/,
+			/^attachment; filename="zenapi-next-backup-\d{4}-\d{2}-\d{2}\.json"$/,
 		);
 		expect(payload.version).toBe(1);
 		expect(typeof payload.exportedAt).toBe("string");

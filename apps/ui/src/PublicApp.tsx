@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "hono/jsx/dom";
 import { createApiFetch } from "./core/api";
 import { toast } from "./core/toast";
 import type { RegistrationMode } from "./core/types";
+import { BrandMark } from "./features/BrandMark";
 import { UserLoginView } from "./features/UserLoginView";
 import { UserRegisterView } from "./features/UserRegisterView";
 
@@ -143,7 +144,7 @@ export const PublicApp = ({
 							class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900"
 							onClick={() => onNavigate("/")}
 						>
-							ZenAPI
+							<BrandMark size="md" />
 						</button>
 						<div class="flex gap-3">
 							<button
@@ -190,7 +191,7 @@ export const PublicApp = ({
 						class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900"
 						onClick={() => onNavigate("/")}
 					>
-						ZenAPI
+						<BrandMark size="md" />
 					</button>
 					<div class="flex gap-3">
 						{registrationMode !== "closed" && (

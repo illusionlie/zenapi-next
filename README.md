@@ -1,4 +1,4 @@
-# ZenAPI
+# ZenAPI Next
 
 > 由 [lsy2246/api-worker](https://github.com/lsy2246/api-worker) 衍生开发。
 

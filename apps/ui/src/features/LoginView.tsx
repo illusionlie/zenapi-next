@@ -1,3 +1,4 @@
+import { BrandMark } from "./BrandMark";
 import { Turnstile } from "./Turnstile";
 
 type LoginViewProps = {
@@ -40,7 +41,7 @@ export const LoginView = ({
 				class="mb-2 font-['Space_Grotesk'] text-2xl tracking-tight text-stone-900"
 				onClick={() => onNavigate("/")}
 			>
-				ZenAPI
+				<BrandMark size="lg" />
 			</button>
 			<p class="text-sm text-stone-500">请输入管理员密码登录管理台。</p>
 			<form class="mt-6 grid gap-4" onSubmit={onSubmit}>

@@ -1252,7 +1252,7 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 			const disposition = res.headers.get("content-disposition") ?? "";
 			const filename =
 				disposition.match(/filename="([^"]+)"/)?.[1] ??
-				`zenapi-backup-${new Date().toISOString().slice(0, 10)}.json`;
+				`zenapi-next-backup-${new Date().toISOString().slice(0, 10)}.json`;
 			const blob = await res.blob();
 			const url = URL.createObjectURL(blob);
 			const anchor = document.createElement("a");

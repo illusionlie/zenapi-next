@@ -18,6 +18,7 @@ import type {
 	UserTabId,
 } from "./core/types";
 import { toggleStatus } from "./core/utils";
+import { BrandMark } from "./features/BrandMark";
 import { ModelMonitoringView } from "./features/ModelMonitoringView";
 import { SecretValueModal } from "./features/SecretValueModal";
 import { UserDashboard } from "./features/UserDashboard";
@@ -504,7 +505,7 @@ export const UserApp = ({
 					class="font-['Space_Grotesk'] text-sm font-semibold tracking-tight text-stone-900"
 					onClick={() => onNavigate("/")}
 				>
-					ZenAPI
+					<BrandMark size="sm" />
 				</button>
 				<div class="w-10" />
 			</div>
@@ -535,7 +536,7 @@ export const UserApp = ({
 							class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900 text-left"
 							onClick={() => onNavigate("/")}
 						>
-							ZenAPI
+							<BrandMark size="md" />
 						</button>
 						<span class="text-xs text-stone-500">
 							{user.name} ({user.email})
@@ -579,7 +580,7 @@ export const UserApp = ({
 						class="font-['Space_Grotesk'] text-lg font-semibold tracking-tight text-stone-900 text-left"
 						onClick={() => onNavigate("/")}
 					>
-						ZenAPI
+						<BrandMark size="md" />
 					</button>
 					<span class="text-xs text-stone-500">
 						{user.name} ({user.email})

@@ -1,5 +1,6 @@
 import { useState } from "hono/jsx/dom";
 import type { RegistrationMode } from "../core/types";
+import { BrandMark } from "./BrandMark";
 import { Turnstile } from "./Turnstile";
 
 type UserLoginViewProps = {
@@ -46,7 +47,7 @@ export const UserLoginView = ({
 					class="mb-2 font-['Space_Grotesk'] text-2xl tracking-tight text-stone-900"
 					onClick={() => onNavigate("/")}
 				>
-					ZenAPI
+					<BrandMark size="lg" />
 				</button>
 				<p class="text-sm text-stone-500">登录您的账户。</p>
 				<form class="mt-6 grid gap-4" onSubmit={handleSubmit}>

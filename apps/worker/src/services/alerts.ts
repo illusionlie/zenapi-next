@@ -209,7 +209,7 @@ export async function evaluateAlerts(
 				continue;
 			}
 			await broadcast(webhooks, {
-				title: "[ZenAPI] 渠道故障报警",
+				title: "[ZenAPI Next] 渠道故障报警",
 				severity: "warning",
 				ts: timestamp,
 				lines: [
@@ -227,7 +227,7 @@ export async function evaluateAlerts(
 			// Recovery with hysteresis: only below threshold/2 (not merely below
 			// threshold) so a flapping channel right at the line doesn't ping-pong.
 			await broadcast(webhooks, {
-				title: "[ZenAPI] 渠道故障恢复",
+				title: "[ZenAPI Next] 渠道故障恢复",
 				severity: "info",
 				ts: timestamp,
 				lines: [
@@ -364,7 +364,7 @@ export async function maybeSendDailyReport(
 	];
 
 	await broadcast(webhooks, {
-		title: "[ZenAPI] 用量日报",
+		title: "[ZenAPI Next] 用量日报",
 		severity: "info",
 		ts: now.toISOString(),
 		lines,

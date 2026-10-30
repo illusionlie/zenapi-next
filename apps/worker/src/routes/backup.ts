@@ -131,7 +131,7 @@ backup.get("/export", async (c) => {
 
 	return c.json(payload, 200, {
 		"Cache-Control": "no-store",
-		"Content-Disposition": `attachment; filename="zenapi-backup-${exportedAt.slice(0, 10)}.json"`,
+		"Content-Disposition": `attachment; filename="zenapi-next-backup-${exportedAt.slice(0, 10)}.json"`,
 	});
 });
 

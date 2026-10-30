@@ -89,7 +89,7 @@ recharge.post("/create", userAuth, async (c) => {
 		out_trade_no: outTradeNo,
 		notify_url: notifyUrl,
 		return_url: returnUrl,
-		name: "ZenAPI 充值",
+		name: "ZenAPI Next 充值",
 		money: ldcAmount.toFixed(2),
 	};
 

@@ -30,7 +30,7 @@ import {
 } from "../apps/worker/src/services/webhook-senders";
 
 const sampleMessage: AlertMessage = {
-	title: "[ZenAPI] 渠道故障报警",
+	title: "[ZenAPI Next] 渠道故障报警",
 	lines: ["渠道: primary", "失败率: 80.0%（4/5 次请求失败）"],
 	severity: "warning",
 	ts: "2026-10-26T08:00:00.000Z",
@@ -79,7 +79,7 @@ describe("webhook senders", () => {
 	it("renders title + lines + timestamp footer", () => {
 		const text = formatMessage(sampleMessage);
 		expect(text).toBe(
-			"[ZenAPI] 渠道故障报警\n渠道: primary\n失败率: 80.0%（4/5 次请求失败）\n时间: 2026-10-26T08:00:00.000Z",
+			"[ZenAPI Next] 渠道故障报警\n渠道: primary\n失败率: 80.0%（4/5 次请求失败）\n时间: 2026-10-26T08:00:00.000Z",
 		);
 	});
 
@@ -96,7 +96,7 @@ describe("webhook senders", () => {
 		expect(calls[0].init.method).toBe("POST");
 		const body = JSON.parse(String(calls[0].init.body));
 		expect(body.msg_type).toBe("text");
-		expect(body.content.text).toContain("[ZenAPI] 渠道故障报警");
+		expect(body.content.text).toContain("[ZenAPI Next] 渠道故障报警");
 		expect(body.content.text).toContain("渠道: primary");
 		expect(body.content.text).toContain("时间: 2026-10-26T08:00:00.000Z");
 	});
@@ -123,7 +123,7 @@ describe("webhook senders", () => {
 		);
 		const body = JSON.parse(String(calls[0].init.body));
 		expect(body.msgtype).toBe("text");
-		expect(body.text.content).toContain("[ZenAPI] 渠道故障报警");
+		expect(body.text.content).toContain("[ZenAPI Next] 渠道故障报警");
 	});
 
 	it("slack: { text } payload", async () => {
@@ -400,7 +400,7 @@ describe("evaluateAlerts", () => {
 		expect(bodies).toHaveLength(5);
 		const generic = bodies.find((call) => call.url.endsWith("generic"));
 		const payload = JSON.parse(generic?.body ?? "{}") as AlertMessage;
-		expect(payload.title).toBe("[ZenAPI] 渠道故障报警");
+		expect(payload.title).toBe("[ZenAPI Next] 渠道故障报警");
 		expect(payload.lines.join("\n")).toContain("渠道: Primary");
 		expect(payload.lines.join("\n")).toContain("失败率: 60.0%（6/10 次请求失败）");
 		// window lower bound = now − 15 min (default), bound to the aggregate
@@ -490,7 +490,7 @@ describe("evaluateAlerts", () => {
 
 		expect(bodies).toHaveLength(1);
 		const payload = JSON.parse(bodies[0].body) as AlertMessage;
-		expect(payload.title).toBe("[ZenAPI] 渠道故障恢复");
+		expect(payload.title).toBe("[ZenAPI Next] 渠道故障恢复");
 		expect(payload.lines.join("\n")).toContain("失败率: 10.0%");
 		const state = JSON.parse(upserts[0].value) as {
 			lastAlertAt: string | null;
@@ -647,7 +647,7 @@ describe("maybeSendDailyReport", () => {
 
 		expect(bodies).toHaveLength(1);
 		const payload = JSON.parse(bodies[0].body) as AlertMessage;
-		expect(payload.title).toBe("[ZenAPI] 用量日报");
+		expect(payload.title).toBe("[ZenAPI Next] 用量日报");
 		const text = payload.lines.join("\n");
 		expect(text).toContain("统计日期: 2026-10-25（UTC）");
 		expect(text).toContain("错误率 4.0%");

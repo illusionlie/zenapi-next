@@ -201,11 +201,11 @@ webhookRoutes.post("/test", async (c) => {
 	}
 
 	const message: AlertMessage = {
-		title: "[ZenAPI] Webhook 测试",
+		title: "[ZenAPI Next] Webhook 测试",
 		severity: "info",
 		ts: nowIso(),
 		lines: [
-			"这是一条来自 ZenAPI 管理台的测试消息。",
+			"这是一条来自 ZenAPI Next 管理台的测试消息。",
 			"收到即表示该通知通道配置可用。",
 		],
 	};
