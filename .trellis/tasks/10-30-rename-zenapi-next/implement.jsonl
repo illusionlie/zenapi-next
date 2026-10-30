@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/api-worker-ui/frontend/index.md", "reason": "UI 层规范索引"}
+{"file": ".trellis/spec/api-worker-ui/frontend/component-guidelines.md", "reason": "组件/a11y/Tailwind 色系约定——Next pill 徽章的实现依据"}
+{"file": ".trellis/spec/api-worker-ui/frontend/directory-structure.md", "reason": "共享品牌组件（BrandMark 等）放置位置的目录约定"}
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "worker 层规范索引（backup/alerts/webhooks/recharge 文本改动）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "编码/测试质量守则"}

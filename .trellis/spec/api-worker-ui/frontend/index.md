@@ -9,7 +9,7 @@
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | App 分发三层、core 基础设施、features 纯展示视图 | ✅ Filled |
-| [Component Guidelines](./component-guidelines.md) | a11y 约定（htmlFor/aria）、语义化按钮、Tailwind 色系、动效 token 与 Modal 壳约定 | ✅ Filled |
+| [Component Guidelines](./component-guidelines.md) | a11y 约定（htmlFor/aria）、语义化按钮、Tailwind 色系、动效 token 与 Modal 壳约定、品牌组件 BrandMark | ✅ Filled |
 | [Quality Guidelines](./quality-guidelines.md) | 全仓 0-error 门禁、a11y 清偿记录、新增 UI 代码保持全绿 | ✅ Filled |
 | [Hook Guidelines](./hook-guidelines.md) | 无自定义 hook、容器 hooks 惯用法、hono/jsx/dom 注意事项 | ✅ Filled |
 | [State Management](./state-management.md) | 零状态库、容器集中持有 + props 单向下发、localStorage token | ✅ Filled |

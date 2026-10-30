@@ -144,6 +144,26 @@ toast 出入场（350ms/250ms + `cubic-bezier(0.22,1,0.36,1)` + 16px rise + cros
 
 **已知边缘遗留**：`UserDashboard.tsx` 的 `!data` 空值守卫仍有一处「加载中...」静态文字（正常流程触达不了，仅 dashboard 加载失败边缘态），清偿时换 `ViewSkeleton variant="stats"`。
 
+### Convention: 品牌显示一律用 features/BrandMark.tsx，禁止硬编码品牌文本（10-30-rename-zenapi-next 沉淀）
+
+**What**: 任何 UI 品牌显示位（侧栏/顶栏 logo、登录注册卡片、公开页导航）必须用共享组件 `<BrandMark size="sm" | "md" | "lg" />`，禁止手写 `ZenAPI` 文本节点。主名 `<span>ZenAPI</span>` 无 class、纯继承所在按钮的字号/字重/字体；`Next` 为 amber 描边小 pill（`rounded-full border-amber-300/70 bg-amber-50 text-amber-700 font-semibold tracking-normal`）；a11y 用外层 `role="img"` + `aria-label="ZenAPI Next"`——整块读为单一品牌名，不读成两个碎片。
+
+**Why**: 品牌更名为 ZenAPI Next 时 13 处品牌位（AppLayout 3 / UserApp 3 / PublicApp 2 / LoginView 1 / UserLoginView 1 / UserRegisterView 3）收拢为单一实现；若放任各处复制 class，未来改名或调样式必然漂移。新页面/新视图出现品牌位时，只有走组件才能保证全站形态一致。
+
+**size 档位映射**（2026-10-30 定版）：`sm` = 移动顶栏（原 text-sm 行）；`md` = 移动抽屉 / 桌面侧栏 / 公开页 header（原 text-lg 行）；`lg` = 登录注册卡片标题（原 text-2xl 行）。新位置先按原字号就近对档，不许自造档位。
+
+```tsx
+// Correct：按钮布局类原样保留，仅文本节点换组件
+<button type="button" class="font-['Space_Grotesk'] text-lg font-semibold ..." onClick={...}>
+	<BrandMark size="md" />
+</button>
+
+// Wrong：硬编码品牌文本（改名时必然漏改）
+<button type="button" class="...">ZenAPI Next</button>
+```
+
+**边界**：纯文本场景（HTML `<title>`、备份文件名 `zenapi-next-backup-*`、webhook/报警标题 `[ZenAPI Next]`、充值商品名）**不经过** BrandMark，直接写字符串 `ZenAPI Next`——徽章是 UI 域概念，不进纯文本。
+
 ---
 
 ## Accessibility
