@@ -209,9 +209,21 @@ export function parseUsageFromHeaders(
 	};
 }
 
+/**
+ * Stream-idle cap for the usage recorder: a single `reader.read()` pending
+ * longer than this is treated as stream termination. The recorder runs in the
+ * waitUntil domain (~30s post-invocation window) and must always finish inside
+ * it — an unbounded read hangs forever when the client disconnects mid-stream
+ * (the tee'd clone branch never settles), which used to cancel the whole
+ * billing chain and silently drop the usage row. Reset on every chunk: this
+ * is an idle cap, not a total-duration cap.
+ */
+const STREAM_IDLE_TIMEOUT_MS = 20_000;
+
 export async function parseUsageFromSse(
 	response: Response,
 	requestStartMs?: number,
+	opts?: { idleTimeoutMs?: number },
 ): Promise<StreamUsage> {
 	if (!response.body) {
 		return { usage: null, firstTokenLatencyMs: null, elapsedMs: null };
@@ -223,11 +235,19 @@ export async function parseUsageFromSse(
 	// TTFT / elapsed 锚点：传入请求起点（epoch ms）时含重试/换渠道时间；
 	// 缺省回退为调用时刻（旧语义，供既有单参数直调兼容）。
 	const start = requestStartMs ?? Date.now();
+	const idleTimeoutMs = opts?.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
 	let firstTokenLatencyMs: number | null = null;
+	// [DONE] 是 OpenAI 形态的协议级流尾：之后不再有数据，无需等待上游关闭
+	// 连接（不关连接/客户端断开场景下等待会永远挂起）。Anthropic 形态无
+	// [DONE]，终止依赖流关闭或下方闲置超时兜底。
+	let sawDone = false;
 
-	const consumeLinePayload = (payload: string) => {
-		if (!payload || payload === "[DONE]") {
-			return;
+	const consumeLinePayload = (payload: string): boolean => {
+		if (!payload) {
+			return false;
+		}
+		if (payload === "[DONE]") {
+			return true;
 		}
 		if (firstTokenLatencyMs === null) {
 			firstTokenLatencyMs = Date.now() - start;
@@ -237,20 +257,34 @@ export async function parseUsageFromSse(
 		if (raw) {
 			rawUsage = rawUsage ? mergeRawUsage(rawUsage, raw) : raw;
 		}
+		return false;
 	};
 
-	while (true) {
-		const { done, value } = await reader.read();
+	while (!sawDone) {
+		// 闲置超时为旁路杀手：read() 正常 settle 时清掉 timer（零额外
+		// microtask 桥接，TTFT 消费时机与裸 await 字节级同构）；timer 先到
+		// 则 cancel clone 流，让挂着的 read() 以 done settle —— 记录侧不再
+		// 需要该流，防底层连接悬置。
+		const idleTimer = setTimeout(() => {
+			reader.cancel().catch(() => {});
+		}, idleTimeoutMs);
+		let readResult: Awaited<ReturnType<typeof reader.read>>;
+		try {
+			readResult = await reader.read();
+		} finally {
+			clearTimeout(idleTimer);
+		}
+		const { done, value } = readResult;
 		if (done) {
 			break;
 		}
 		buffer += decoder.decode(value, { stream: true });
 		let newlineIndex = buffer.indexOf("\n");
-		while (newlineIndex !== -1) {
+		while (newlineIndex !== -1 && !sawDone) {
 			const line = buffer.slice(0, newlineIndex).trim();
 			buffer = buffer.slice(newlineIndex + 1);
 			if (line.startsWith("data:")) {
-				consumeLinePayload(line.slice(5).trim());
+				sawDone = consumeLinePayload(line.slice(5).trim());
 			}
 			newlineIndex = buffer.indexOf("\n");
 		}

@@ -205,7 +205,11 @@ type StreamUsage = {
 	firstTokenLatencyMs: number | null; // 锚点 → 首条 SSE data 行
 	elapsedMs: number | null;           // 锚点 → 流尾；无响应体时为 null
 };
-parseUsageFromSse(response: Response, requestStartMs?: number): Promise<StreamUsage>;
+parseUsageFromSse(
+	response: Response,
+	requestStartMs?: number,
+	opts?: { idleTimeoutMs?: number }, // 缺省 STREAM_IDLE_TIMEOUT_MS=20s，测试注入用
+): Promise<StreamUsage>;
 // requestStartMs 缺省回退 Date.now()（调用时刻）——单参数旧直调兼容是硬约束
 ```
 
@@ -216,6 +220,7 @@ parseUsageFromSse(response: Response, requestStartMs?: number): Promise<StreamUs
 - **回退恒等**：SSE 解析 catch 分支与非流式路径不传第三参，headers latency + 既有 TTFT 行为字节级不变；无 body → `{usage: null, ttft: null, elapsedMs: null}`，`??` 落回 headers latency。
 - **非流式 TTFT ≡ `latencyMs` 是设计常量**（proxy :1084/:1131、anthropic :576/:636）：非流式整包到达无可观测首 token 时刻；强制流式聚合（客户端非流式）同属此类，网关侧上游 TTFT 不透出（范围外裁定）。
 - **Workers 时钟语义**：`Date.now()` 只在 I/O 边界前进——流读取是 I/O，流内取差值真实；空候选（404/503）在落库前提前返回，不存在零 I/O 的 `latency_ms = 0` 行。
+- **有界终止**（2026-10-30 增补，任务 10-30-stream-usage-idle-timeout）：解析器跑在 waitUntil 域（~30s 窗口），必须永远自行结束——读到 `data: [DONE]` 立即返回（OpenAI 形态协议级流尾，不等流关闭）；单次 read 闲置 > `STREAM_IDLE_TIMEOUT_MS`（20s）经**旁路 `reader.cancel()`** 让挂着的 read 以 done settle（不用 `Promise.race` 包装——race 的 microtask 桥接会推迟 chunk 消费时机，fake timers 下 TTFT 锚点漂移，`tests/usage-cache.test.ts` latency anchors 是锚）。取消/超时路径语义与流失败一致：调用方 catch → fallback record，行不丢。
 
 ### 10.4 Validation & Error Matrix
 
