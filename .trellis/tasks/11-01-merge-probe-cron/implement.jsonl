@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/index.md", "reason": "后端层规范索引：cron 调度分发与文档同步约定"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "biome 簿记与提交前检查口径（.trellis task.json 缩进门禁为必然产物）"}
