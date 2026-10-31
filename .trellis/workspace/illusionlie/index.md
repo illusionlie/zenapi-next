@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-10-28
+- **Total Sessions**: 23
+- **Last Active**: 2026-10-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~766 | Active |
+| `journal-1.md` | ~789 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-10-31 | 流式 usage 丢行诊断与修复（waitUntil 取消链） | `802ebf0`, `b79f9d9`, `4d8f722` | `main` |
 | 22 | 2026-10-28 | 缓存 token 折价计费落地 + CPA/NewAPI 批次立项 | `f81de80`, `3f1f373` | `main` |
 | 21 | 2026-10-28 | responses↔anthropic pivot 转换与流式存量缺口修复 | `19965cb`, `0c2652b`, `ac34eaf`, `6bd3514`, `a8f2796`, `1d94f5c` | `main` |
 | 20 | 2026-10-23 | 流式延迟口径修复：TTFT 锚定请求起点 + latency_ms 含流时长 | `517c6b1`, `e732ead`, `f196758` | `main` |

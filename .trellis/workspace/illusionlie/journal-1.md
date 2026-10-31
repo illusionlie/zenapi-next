@@ -764,3 +764,26 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: 流式 usage 丢行诊断与修复（waitUntil 取消链）
+
+**Date**: 2026-10-31
+**Task**: 流式 usage 丢行诊断与修复（waitUntil 取消链）
+**Branch**: `main`
+
+### Summary
+
+线上 10-26 起 usage 系统性丢行诊断闭环：唯一病因为 parseUsageFromSse 在 waitUntil 域无界挂起（客户端断开后 clone 流 read 永久 pending → D1 batch 从未执行 → CF 30s 窗口取消 → 行静默丢失；billing batch failed 零命中因 batch 根本未开始）。修复 b79f9d9：[DONE] 提前返回 + 单次 read 闲置 20s 旁路 reader.cancel()，两调用方零改动；教训——勿用 Promise.race 包装 read（microtask 桥接致 fake timers TTFT 锚点漂移）。970/970 测试绿，部署后线上验证通过（21:44 起 21 行流式+非流式全部落库、无 warn）；部署后 ~25 分钟内的残留丢失为 CF 边缘版本传播延迟，非代码问题。运维事实（生产 D1 uuid 直连、CLOUDFLARE_ACCOUNT_ID 选择）已沉淀 memory zenapi-prod-d1-access。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `802ebf0` | (see git log) |
+| `b79f9d9` | (see git log) |
+| `4d8f722` | (see git log) |
+
+### Status
+
+[OK] **Completed**
