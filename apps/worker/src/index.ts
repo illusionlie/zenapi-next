@@ -222,17 +222,14 @@ app.notFound(async (c) => {
  * historical semantics — rollup yesterday, then batched prunes (raw logs /
  * expired sessions / old rollups / channel probe history) — via
  * runDailyMaintenance; the every-5-minutes entry runs the channel
- * failure-rate alert evaluator; the every-10-minutes entry runs the active
- * channel health probe scheduler (default-off: with no channel switched on a
- * tick costs 1–2 read-only queries). Steps are fault-isolated inside each
+ * failure-rate alert evaluator first, then the active channel health probe
+ * scheduler (default-off: with no channel switched on a tick costs 1–2
+ * read-only queries per handler). Steps are fault-isolated inside each
  * handler. Direct await — a cron invocation keeps the isolate alive for the
  * whole chain (15-minute wall clock budget).
  */
 /** The every-5-minutes entry (see wrangler.toml [triggers] crons array). */
 const ALERT_EVALUATION_CRON = "*/5 * * * *";
-
-/** The every-10-minutes entry (see wrangler.toml [triggers] crons array). */
-const CHANNEL_PROBE_CRON = "*/10 * * * *";
 
 const scheduled = (
 	event: ScheduledEvent,
@@ -240,10 +237,7 @@ const scheduled = (
 	_ctx: ExecutionContext,
 ): Promise<void> => {
 	if (event.cron === ALERT_EVALUATION_CRON) {
-		return evaluateAlerts(env.DB);
-	}
-	if (event.cron === CHANNEL_PROBE_CRON) {
-		return runChannelProbes(env.DB);
+		return evaluateAlerts(env.DB).then(() => runChannelProbes(env.DB));
 	}
 	return runDailyMaintenance(env.DB);
 };

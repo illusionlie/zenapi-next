@@ -816,7 +816,7 @@ export async function setAlertWindowMinutes(
 	await upsertSetting(db, ALERT_WINDOW_MINUTES_KEY, value.toString());
 }
 
-// Channel active health probe (the */10 cron scheduler in
+// Channel active health probe (the */5 cron tick scheduler in
 // services/channel-probe.ts consumes the interval; the per-channel
 // probe_enabled switch lives on the channels table, not here)
 
@@ -846,7 +846,7 @@ export function resolveProbeIntervalMinutes(raw: SettingsRawMap): number {
 /**
  * Uncached read for the probe scheduler and the admin settings form ("admin
  * form truth", same contract as loadAlertConfigDirect): the scheduler runs on
- * the every-10-minutes cron, not per-request — no TTL cache needed.
+ * the every-5-minutes cron tick, not per-request — no TTL cache needed.
  */
 export async function loadProbeIntervalMinutesDirect(
 	db: D1Database,

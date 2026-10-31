@@ -678,7 +678,8 @@ describe("maybeSendDailyReport", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cron dispatch (design §5): the every-5-minutes entry → evaluateAlerts,
+// Cron dispatch (design §5): the every-5-minutes entry → evaluateAlerts (+ the
+// probe scheduler piggybacking on the same tick, mocked as tolerance here),
 // every other entry → runDailyMaintenance. Mocked via vi.doMock + dynamic
 // import so the evaluator/report tests above keep the real implementations.
 // ---------------------------------------------------------------------------
@@ -698,15 +699,20 @@ describe("cron dispatch", () => {
 
 	afterEach(() => {
 		vi.doUnmock("../apps/worker/src/services/alerts");
+		vi.doUnmock("../apps/worker/src/services/channel-probe");
 		vi.doUnmock("../apps/worker/src/services/usage-stats");
 	});
 
-	it("routes the every-5-minutes entry to the alert evaluator only", async () => {
-		const evaluateAlerts = vi.fn();
+	it("routes the every-5-minutes entry to the alert evaluator (probe piggyback tolerated)", async () => {
+		const evaluateAlerts = vi.fn(async () => {});
 		const runDailyMaintenance = vi.fn();
 		vi.doMock("../apps/worker/src/services/alerts", () => ({
 			evaluateAlerts,
 			maybeSendDailyReport: vi.fn(),
+		}));
+		vi.doMock("../apps/worker/src/services/channel-probe", () => ({
+			runChannelProbes: vi.fn(),
+			pruneChannelProbes: vi.fn(),
 		}));
 		vi.doMock(
 			"../apps/worker/src/services/usage-stats",
@@ -728,7 +734,7 @@ describe("cron dispatch", () => {
 	});
 
 	it("keeps the 03:17 entry on runDailyMaintenance unchanged", async () => {
-		const evaluateAlerts = vi.fn();
+		const evaluateAlerts = vi.fn(async () => {});
 		const runDailyMaintenance = vi.fn();
 		vi.doMock("../apps/worker/src/services/alerts", () => ({
 			evaluateAlerts,

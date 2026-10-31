@@ -10,8 +10,8 @@ PROXY_RETRY_DELAY_MS = "200"
 [triggers]
 # 03:17 UTC：rollup 昨日 → 分批清理过期原始日志/会话/rollup/channel_probes（+ 可选用量日报在链尾）
 # 每 5 分钟：渠道失败率报警评估（services/alerts.ts evaluateAlerts）
-# 每 10 分钟：渠道主动健康探测（services/channel-probe.ts runChannelProbes；默认全关零行为）
-crons = ["17 3 * * *", "*/5 * * * *", "*/10 * * * *"]
+#           + 渠道主动健康探测到期判定（services/channel-probe.ts runChannelProbes；默认全关零行为）
+crons = ["17 3 * * *", "*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

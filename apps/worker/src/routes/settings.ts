@@ -122,7 +122,7 @@ settings.get("/", async (c) => {
 	// 热路径，无缓存链；表单即真相）
 	const alertConfig = await loadAlertConfigDirect(c.env.DB);
 	const dailyReportEnabled = await loadDailyReportFlagDirect(c.env.DB);
-	// 主动探测间隔同契约：直读 clamp 后有效值（调度器走 */10 cron；0 = 总闸关闭）
+	// 主动探测间隔同契约：直读 clamp 后有效值（调度器走 */5 cron tick；0 = 总闸关闭）
 	const probeIntervalMinutes = await loadProbeIntervalMinutesDirect(c.env.DB);
 	// 缓存折价倍率两键同契约：直读 clamp 后有效值（计费热路径走 30s 缓存快照）
 	const cacheRatioConfig = await loadCacheRatioConfigDirect(c.env.DB);

@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS webhooks (
   updated_at TEXT NOT NULL
 );
 
--- channel_probes: 渠道主动健康探测历史（*/10 cron 调度，services/
+-- channel_probes: 渠道主动健康探测历史（*/5 cron tick 顺带调度，services/
 --   channel-probe.ts；status ∈ healthy|degraded|down，detail 为逐格式结果
 --   JSON {format: "ok" | "err: 截断消息"}）。保留 7 天，03:17 cron 保留链尾
 --   清理（迁移 0032）。

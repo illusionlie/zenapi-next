@@ -1,7 +1,7 @@
 /**
  * Channel active health probes (task 10-26-channel-probe, default OFF).
  *
- * The every-10-minutes cron tick calls runChannelProbes: channels with the
+ * The every-5-minutes cron tick calls runChannelProbes: channels with the
  * per-channel probe_enabled switch on are probed once their last_probe_at is
  * older than (global interval − random jitter). The probe itself is a plain
  * GET {resolved endpoint}/models per declared API format — zero tokens, zero

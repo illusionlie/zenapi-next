@@ -508,13 +508,14 @@ describe("channel probe retention", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cron dispatch (design §4): the every-10-minutes entry → runChannelProbes;
-// the 03:17 and */5 entries keep their existing semantics (existing
+// Cron dispatch (design §4): the */5 entry runs the alert evaluator first,
+// then the probe scheduler (probe cron merged into the */5 tick, triggers
+// 3 → 2); the 03:17 entry keeps its existing semantics (existing
 // webhook-alerts tests remain the anchor). Mocked via vi.doMock + dynamic
 // import so the tests above keep the real implementations.
 // ---------------------------------------------------------------------------
 
-describe("cron dispatch — third branch", () => {
+describe("cron dispatch — */5 tick piggyback", () => {
 	const makeEvent = (cron: string) => ({ cron }) as ScheduledEvent;
 	const env = { DB: { marker: "db" } } as unknown as Bindings;
 	const ctx = {} as ExecutionContext;
@@ -529,41 +530,9 @@ describe("cron dispatch — third branch", () => {
 		vi.doUnmock("../apps/worker/src/services/usage-stats");
 	});
 
-	it("routes the every-10-minutes entry to the probe scheduler only", async () => {
+	it("routes the */5 entry to alerts first, then the probe scheduler", async () => {
 		const runChannelProbes = vi.fn();
-		const evaluateAlerts = vi.fn();
-		const runDailyMaintenance = vi.fn();
-		vi.doMock("../apps/worker/src/services/channel-probe", () => ({
-			runChannelProbes,
-			pruneChannelProbes: vi.fn(),
-		}));
-		vi.doMock("../apps/worker/src/services/alerts", () => ({
-			evaluateAlerts,
-			maybeSendDailyReport: vi.fn(),
-		}));
-		vi.doMock(
-			"../apps/worker/src/services/usage-stats",
-			async (importOriginal) => {
-				const actual =
-					await importOriginal<
-						typeof import("../apps/worker/src/services/usage-stats")
-					>();
-				return { ...actual, runDailyMaintenance };
-			},
-		);
-		const { scheduled } = await import("../apps/worker/src/index");
-
-		await scheduled(makeEvent("*/10 * * * *"), env, ctx);
-
-		expect(runChannelProbes).toHaveBeenCalledTimes(1);
-		expect(runChannelProbes).toHaveBeenCalledWith(env.DB);
-		expect(evaluateAlerts).not.toHaveBeenCalled();
-		expect(runDailyMaintenance).not.toHaveBeenCalled();
-	});
-
-	it("keeps the */5 entry on the alert evaluator and 03:17 on daily maintenance", async () => {
-		const runChannelProbes = vi.fn();
-		const evaluateAlerts = vi.fn();
+		const evaluateAlerts = vi.fn(async () => {});
 		const runDailyMaintenance = vi.fn();
 		vi.doMock("../apps/worker/src/services/channel-probe", () => ({
 			runChannelProbes,
@@ -586,14 +555,47 @@ describe("cron dispatch — third branch", () => {
 		const { scheduled } = await import("../apps/worker/src/index");
 
 		await scheduled(makeEvent("*/5 * * * *"), env, ctx);
+
 		expect(evaluateAlerts).toHaveBeenCalledTimes(1);
-		expect(runChannelProbes).not.toHaveBeenCalled();
+		expect(evaluateAlerts).toHaveBeenCalledWith(env.DB);
+		expect(runChannelProbes).toHaveBeenCalledTimes(1);
+		expect(runChannelProbes).toHaveBeenCalledWith(env.DB);
+		// fixed order: probes start only after the alert evaluator completed
+		expect(evaluateAlerts.mock.invocationCallOrder[0]).toBeLessThan(
+			runChannelProbes.mock.invocationCallOrder[0],
+		);
 		expect(runDailyMaintenance).not.toHaveBeenCalled();
+	});
+
+	it("keeps the 03:17 entry on daily maintenance without probing", async () => {
+		const runChannelProbes = vi.fn();
+		const evaluateAlerts = vi.fn(async () => {});
+		const runDailyMaintenance = vi.fn();
+		vi.doMock("../apps/worker/src/services/channel-probe", () => ({
+			runChannelProbes,
+			pruneChannelProbes: vi.fn(),
+		}));
+		vi.doMock("../apps/worker/src/services/alerts", () => ({
+			evaluateAlerts,
+			maybeSendDailyReport: vi.fn(),
+		}));
+		vi.doMock(
+			"../apps/worker/src/services/usage-stats",
+			async (importOriginal) => {
+				const actual =
+					await importOriginal<
+						typeof import("../apps/worker/src/services/usage-stats")
+					>();
+				return { ...actual, runDailyMaintenance };
+			},
+		);
+		const { scheduled } = await import("../apps/worker/src/index");
 
 		await scheduled(makeEvent("17 3 * * *"), env, ctx);
 		expect(runDailyMaintenance).toHaveBeenCalledTimes(1);
+		expect(runDailyMaintenance).toHaveBeenCalledWith(env.DB);
 		expect(runChannelProbes).not.toHaveBeenCalled();
-		expect(evaluateAlerts).toHaveBeenCalledTimes(1);
+		expect(evaluateAlerts).not.toHaveBeenCalled();
 	});
 });
 
