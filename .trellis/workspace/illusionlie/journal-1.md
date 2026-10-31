@@ -787,3 +787,25 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: 品牌更名 ZenAPI Next（BrandMark 徽章 + worker 文本）
+
+**Date**: 2026-10-31
+**Task**: 品牌更名 ZenAPI Next（BrandMark 徽章 + worker 文本）
+**Branch**: `main`
+
+### Summary
+
+完成 ZenAPI → ZenAPI Next 全站更名：新增 features/BrandMark.tsx（主名继承样式 + amber pill Next 徽章，sm/md/lg 三档，role=img + aria-label），13 处 UI 品牌位统一换用；备份文件名 zenapi-next-backup-*、webhook/报警/日报标题 [ZenAPI Next]、充值商品名、README/AGENTS.md 同步；包名/worker 部署名不动，部署 URL 稳定。check 验收 5/5 pass，970 用例全绿。spec 沉淀品牌组件约定（禁止硬编码品牌文本）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a878b4e` | (see git log) |
+| `0b79fb9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
