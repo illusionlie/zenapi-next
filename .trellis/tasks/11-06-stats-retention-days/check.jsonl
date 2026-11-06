@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "校验新键是否满足读宽写严/clamp 一致契约（GET 表单真值、PUT 严格校验、默认回退）"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "校验 rollup 清理改动未破坏 §9 两段拼装语义与防丢守卫（原始行已清且 rollup 存在的日期 no-op 等）"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "门禁命令全绿与规范符合性检查依据"}

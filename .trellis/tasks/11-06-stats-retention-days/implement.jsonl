@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/api-worker/backend/settings-config.md", "reason": "数值型 settings 键标准链路（读宽写严、回退链、clamp 三层一致）——本任务新增 stats_retention_days 全程照抄该契约"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "§9 预聚合两段拼装与 rollup 防丢守卫——改 runDailyMaintenance 的 rollup 清理 cutoff 前必读，防破坏防丢语义"}
+{"file": ".trellis/spec/api-worker/backend/error-handling.md", "reason": "jsonError 统一形态与 snake_case 错误码（invalid_stats_retention_days）写法依据"}
+{"file": ".trellis/spec/api-worker/backend/quality-guidelines.md", "reason": "提交门禁（check/typecheck/test）与 Biome 规则、命名禁则"}
