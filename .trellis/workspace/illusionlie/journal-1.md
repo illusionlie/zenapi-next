@@ -854,3 +854,24 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: 品牌图标「禅门」全站落地
+
+**Date**: 2026-11-06
+**Task**: 品牌图标「禅门」全站落地
+**Branch**: `main`
+
+### Summary
+
+设计会话拍板「禅门」方案（墨底方圆 + 纸白缺口圆环 + 圆心朱点，缺口朝右上 45°），轻量任务 11-06-brand-icon 一次落地：apps/ui/public/favicon.svg（16px 光学修正版）、docs/assets/logo.svg + logo-mono.svg 独立母版（文档/外部引用）、BrandMark 前置 inline mark（1.15em 随档位缩放，12 处调用点零改动全站生效）、index.html favicon 引用、README 挂 logo、AGENTS §3 补目录。验收：biome/tsc/981 测试全绿，build 后 dist 含 favicon.svg，dev server 实测 200 image/svg+xml，登录页截图确认图标与文字基线协调；favicon 补 role/aria-label 过 biome a11y 规则。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a5c659d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
