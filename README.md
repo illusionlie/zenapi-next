@@ -1,5 +1,7 @@
 # ZenAPI Next
 
+<p align="center"><img src="docs/assets/logo.svg" width="120" alt="ZenAPI Next logo" /></p>
+
 > 由 [lsy2246/api-worker](https://github.com/lsy2246/api-worker) 衍生开发。
 
 轻量级 AI API 网关，基于 Cloudflare Workers + D1，内置管理后台与多用户系统。

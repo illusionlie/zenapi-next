@@ -44,6 +44,8 @@ apps/ui/                    # 管理台 / 用户端前端
     core/                   # api / constants / types / utils
     features/               # 各功能视图（AdminApp/UserApp 各自的 View）
   dist/                     # 构建产物（由 Worker Static Assets 托管，勿手动改）
+  public/                   # 静态资源原样拷贝进 dist（favicon.svg——品牌图标 16px 光学修正版）
+docs/assets/                # 品牌图标独立母版（logo.svg / logo-mono.svg，几何契约见任务 11-06-brand-icon PRD）
 tests/                      # Vitest 单测（如 model-allowlist.test.ts、channel-models.test.ts、filter-allowed-channels.test.ts）
 ```
 
