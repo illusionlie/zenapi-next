@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/api-worker/backend/channel-routing.md", "reason": "Q3 路由矩阵插位依据：api_formats 声明、selectTargetFormat 偏好序、探测并集契约"}
+{"file": ".trellis/spec/api-worker/backend/format-conversion.md", "reason": "Q2 转换器成本评估依据：既有 chat↔anthropic/chat↔responses 原语、流式不变量、usage 末 chunk 惯例"}
+{"file": ".trellis/spec/api-worker/backend/usage-accounting.md", "reason": "Q4 usage/计费口径映射依据：缓存字段优先级链、口径换算、与 cache-token-billing 交叉"}
+{"file": ".trellis/spec/api-worker/backend/proxy-headers.md", "reason": "Q6 连通性测试/模型拉取端点头语义参考（x-goog-api-key vs Bearer）与 settings 新键标准链路"}

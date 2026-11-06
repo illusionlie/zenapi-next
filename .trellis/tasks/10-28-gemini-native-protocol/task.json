@@ -3,7 +3,7 @@
 	"name": "gemini-native-protocol",
 	"title": "Gemini 原生协议设计评估",
 	"description": "评估 Gemini /v1beta 原生协议作为第 5 种 api_format 的协议覆盖、转换成本与 Workers 开销，产出评估报告供拍板",
-	"status": "planning",
+	"status": "in_progress",
 	"dev_type": null,
 	"scope": null,
 	"package": null,
