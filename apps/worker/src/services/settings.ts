@@ -864,6 +864,47 @@ export async function setProbeIntervalMinutes(
 	await upsertSetting(db, PROBE_INTERVAL_MINUTES_KEY, value.toString());
 }
 
+// Stats rollup retention (usage_stats_daily prune horizon consumed by the
+// daily 03:17 UTC cron in services/usage-stats.ts). Deliberately independent
+// of log_retention_days — that key governs the raw usage_logs prune only.
+// Born in settings with no env tier, and the cron path is cold (once a day),
+// so the key is NOT in PROXY_SETTING_KEYS — reads go through the uncached
+// getter below (same posture as the alert / probe cron keys).
+
+export const STATS_RETENTION_KEY = "stats_retention_days";
+export const MIN_STATS_RETENTION_DAYS = 1;
+export const MAX_STATS_RETENTION_DAYS = 365;
+/** 180 = the pre-feature hard-coded horizon; a missing key keeps the exact
+ * pre-feature behavior (prd AC2, migration 0026's original 180d retention). */
+export const DEFAULT_STATS_RETENTION_DAYS = 180;
+
+/**
+ * Returns the stats rollup retention days from settings, falling back to the
+ * 180-day default (same readSetting shape as getRetentionDays). Read-side
+ * lenient: missing / blank / non-integer values degrade to the default, an
+ * out-of-range integer is clamped into [1, 365] (write-side strictness plus
+ * this clamp = the settings-config.md matrix; dirty hand-edited rows never
+ * break the cron prune).
+ */
+export async function getStatsRetentionDays(db: D1Database): Promise<number> {
+	const value = await readSetting(db, STATS_RETENTION_KEY);
+	return parseBoundedAlertInt(
+		value,
+		MIN_STATS_RETENTION_DAYS,
+		MAX_STATS_RETENTION_DAYS,
+		DEFAULT_STATS_RETENTION_DAYS,
+	);
+}
+
+/** Updates the stats rollup retention setting (write-side strict 1–365
+ * integer; the PUT route validation rejects anything else before this). */
+export async function setStatsRetentionDays(
+	db: D1Database,
+	days: number,
+): Promise<void> {
+	await upsertSetting(db, STATS_RETENTION_KEY, days.toString());
+}
+
 // Cache token billing ratios (cache read/write price = input_price × ratio;
 // consumed by the post-response billing path in routes/proxy.ts and
 // routes/anthropic-proxy.ts). Born in settings with no env tier.

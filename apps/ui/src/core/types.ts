@@ -267,6 +267,8 @@ export type RegistrationMode = "open" | "linuxdo_only" | "closed";
 
 export type Settings = {
 	log_retention_days: number;
+	/** 统计聚合表保留天数(usage_stats_daily 清理视界,默认 180,与日志保留相互独立) */
+	stats_retention_days: number;
 	session_ttl_hours: number;
 	admin_password_set?: boolean;
 	registration_mode: RegistrationMode;
@@ -405,6 +407,8 @@ export type TokenForm = {
 
 export type SettingsForm = {
 	log_retention_days: string;
+	/** 统计保留天数,数值字段以 string 承接 input(默认 180) */
+	stats_retention_days: string;
 	session_ttl_hours: string;
 	admin_password: string;
 	registration_mode: RegistrationMode;

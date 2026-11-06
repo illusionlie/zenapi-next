@@ -238,6 +238,8 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 		setData((prev) => ({ ...prev, settings }));
 		setSettingsForm({
 			log_retention_days: String(settings.log_retention_days ?? 30),
+			// 统计保留天数(GET 返回 clamp 后有效值,缺失回退默认 180)
+			stats_retention_days: String(settings.stats_retention_days ?? 180),
 			session_ttl_hours: String(settings.session_ttl_hours ?? 12),
 			admin_password: "",
 			registration_mode: settings.registration_mode ?? "open",
@@ -730,9 +732,11 @@ export const AdminApp = ({ token, updateToken, onNavigate }: AdminAppProps) => {
 		async (event: Event) => {
 			event.preventDefault();
 			const retention = Number(settingsForm.log_retention_days);
+			const statsRetention = Number(settingsForm.stats_retention_days);
 			const sessionTtlHours = Number(settingsForm.session_ttl_hours);
 			const payload: Record<string, number | string | boolean> = {
 				log_retention_days: retention,
+				stats_retention_days: statsRetention,
 				session_ttl_hours: sessionTtlHours,
 				registration_mode: settingsForm.registration_mode,
 				checkin_reward: Number(settingsForm.checkin_reward),

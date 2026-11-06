@@ -172,7 +172,7 @@ pruneUsageLogsBatched(db, beforeIso, opts?: { chunkSize?; maxRounds? }): Promise
 // 默认 RETENTION_CHUNK_ROWS=5000 × RETENTION_MAX_ROUNDS=180；轮数到顶 complete=false（可重入续删）
 retentionCutoffIso(now, retentionDays): string;  // UTC 毫秒统一 cutoff（cron 与手动端点共用，禁本地时区日历运算）
 rollupMissingDates(db, now?): Promise<UtcDate[]>;  // MIN(created_at) 探底 + JS 枚举日期 + DISTINCT stat_date 差集；禁 substr(created_at) 全表扫
-runDailyMaintenance(env): Promise<void>;  // cron 四步：自愈扫窗（含昨日，排除今日）→ retention（complete=false 时 console.warn）→ sessions → rollup 180d
+runDailyMaintenance(env): Promise<void>;  // cron 四步：自愈扫窗（含昨日，排除今日）→ retention（complete=false 时 console.warn）→ sessions → rollup 清理（cutoff = settings stats_retention_days，读侧 clamp [1,365] 默认 180，cron 冷路径直读；2026-11-06 前硬编码 180，未设置时行为逐字节一致）
 ```
 
 ### 9.3 Contracts
@@ -182,7 +182,7 @@ runDailyMaintenance(env): Promise<void>;  // cron 四步：自愈扫窗（含昨
 - **短窗口 raw-only（2026-10-21）**：span ≤ 1 天（`to` 缺省时以 now 为终点，秒粒度 floor——`slice(0,19)` 截断 + now 带毫秒，毫秒直比漏判 1d 档）完全绕开 rollup 段，rawFrom/rawTo 用精确边界。防的缺陷：1d 档恒吃昨天整天（~2x 虚高）、15m/1h 档跨 UTC 午夜 24x–96x 放大、同响应 summary（split）与小时趋势（raw-only）自相矛盾。
 - **`to` 边界整天近似（仅 >1 天窗口）**：`to` 落在往日时该日整天从 rollup 计入（误差 ≤ 1/窗口天数）。shipped UI 从不传 `to`，仅影响外部 API 客户端，AGENTS §8 已注记。
 - **防丢守卫**：`rollupDate` 对「该日原始行已清且 rollup 行存在」直接 no-op——retention 清掉原始日志后，cron 重跑 / 显式单日回填都不得把幸存统计删空。
-- **配额预算（2026-10-21）**：D1 每次调用 1000 条查询（Paid）/ 50（Free）上限覆盖 cron 整条链；最坏全链 ≈ 219 条（探测 7 + rollupDate 4×7 + settings 1 + DELETE ≤180 + sessions 2 + rollup 1）。改 chunk/轮数/扫窗天数前必须重算预算表。
+- **配额预算（2026-10-21）**：D1 每次调用 1000 条查询（Paid）/ 50（Free）上限覆盖 cron 整条链；最坏全链 ≈ 220 条（探测 7 + rollupDate 4×7 + settings 2 + DELETE ≤180 + sessions 2 + rollup 1）。改 chunk/轮数/扫窗天数前必须重算预算表。
 - **cron 单步容错**：四步各自 try/catch `[rollup]`/`[retention]` console.error 继续；retention 读取走 `getRetentionDays` 三级回退（脏值回落默认 30，不会误清全表）；自愈扫窗内单日**写**失败按日容错、**probe 读**失败冒泡到步骤级（读故障继续扫只会烧查询）。
 - **手动端点**：`POST /api/usage/prune` 响应 `{ deleted, complete }`，complete=false 表示保险丝到顶、重跑续删；`GET /api/usage` 内联 prune 与 cron 同一有界实现（Free 计划 50 条上限下仍可能超限，属文档化接受）。
 
@@ -216,7 +216,7 @@ parseUsageFromSse(
 ### 10.3 Contracts
 
 - **TTFT 锚定请求起点**（proxy `start` :907 / anthropic `start` :218，均在重试循环之前）：含重试/换渠道时间，用户体感口径（2026-10-23 用户裁定）；渠道质量评估另有监测页独立统计，不混用。
-- **流式 `latency_ms` 流尾取值**：流式成功路径经 `record`/`recordFn` 第三参 `streamLatencyMs ?? latencyMs` 覆盖——TTFB→总时长口径变更，部署后与历史 rollup 行存在台阶，随 180d 保留期老化消失。
+- **流式 `latency_ms` 流尾取值**：流式成功路径经 `record`/`recordFn` 第三参 `streamLatencyMs ?? latencyMs` 覆盖——TTFB→总时长口径变更，部署后与历史 rollup 行存在台阶，随 rollup 保留期（settings `stats_retention_days`，默认 180d）老化消失。
 - **回退恒等**：SSE 解析 catch 分支与非流式路径不传第三参，headers latency + 既有 TTFT 行为字节级不变；无 body → `{usage: null, ttft: null, elapsedMs: null}`，`??` 落回 headers latency。
 - **非流式 TTFT ≡ `latencyMs` 是设计常量**（proxy :1084/:1131、anthropic :576/:636）：非流式整包到达无可观测首 token 时刻；强制流式聚合（客户端非流式）同属此类，网关侧上游 TTFT 不透出（范围外裁定）。
 - **Workers 时钟语义**：`Date.now()` 只在 I/O 边界前进——流读取是 I/O，流内取差值真实；空候选（404/503）在落库前提前返回，不存在零 I/O 的 `latency_ms = 0` 行。

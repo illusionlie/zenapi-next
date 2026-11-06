@@ -43,6 +43,7 @@ export const BACKUP_SETTINGS_EXCLUDED_KEYS: readonly string[] = [
  */
 export const BACKUP_SETTINGS_EXPORT_KEYS: readonly string[] = [
 	"log_retention_days",
+	"stats_retention_days",
 	"session_ttl_hours",
 	"registration_mode",
 	"checkin_reward",

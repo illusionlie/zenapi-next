@@ -135,6 +135,7 @@ function makeRichChannel(
 const RICH_SETTINGS_ROWS = [
 	{ key: "announcement", value: "hello" },
 	{ key: "log_retention_days", value: "7" },
+	{ key: "stats_retention_days", value: "60" },
 	{ key: "proxy_retry_rounds", value: "3" },
 	{ key: "ldc_epay_key", value: "epay-secret-visible-in-admin-ui" },
 	// 排除清单内的键存在于库中，导出必须过滤
@@ -223,6 +224,7 @@ describe("GET /api/backup/export", () => {
 		// 管理台可见键导出
 		expect(settings.announcement).toBe("hello");
 		expect(settings.log_retention_days).toBe("7");
+		expect(settings.stats_retention_days).toBe("60");
 		expect(settings.proxy_retry_rounds).toBe("3");
 		expect(settings.ldc_epay_key).toBe("epay-secret-visible-in-admin-ui");
 		// 排除清单（管理员密码哈希 / Turnstile secret）绝不出现
@@ -470,7 +472,7 @@ describe("POST /api/backup/import — round-trip and batch shape", () => {
 			channels: 1,
 			model_aliases: 1,
 			channel_model_aliases: 1,
-			settings: 4,
+			settings: 5,
 		});
 		expect(body.cache_staleness).toEqual({
 			channels_seconds: 10,
@@ -528,16 +530,17 @@ describe("POST /api/backup/import — round-trip and batch shape", () => {
 		expect(channelAliasInsert?.args[0]).toBe("cal_1");
 		expect(channelAliasInsert?.args[1]).toBe("ch_rich");
 
-		// settings 恢复 4 条（排除键不进载荷）
+		// settings 恢复 5 条（排除键不进载荷）
 		const settingsInserts = statements.filter((s) =>
 			s.sql.startsWith("INSERT INTO settings"),
 		);
-		expect(settingsInserts).toHaveLength(4);
+		expect(settingsInserts).toHaveLength(5);
 		expect(settingsInserts.map((s) => s.args[0]).sort()).toEqual([
 			"announcement",
 			"ldc_epay_key",
 			"log_retention_days",
 			"proxy_retry_rounds",
+			"stats_retention_days",
 		]);
 	});
 

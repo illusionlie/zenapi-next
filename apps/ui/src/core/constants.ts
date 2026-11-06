@@ -98,6 +98,7 @@ export const initialTokenForm: TokenForm = {
 
 export const initialSettingsForm: SettingsForm = {
 	log_retention_days: "30",
+	stats_retention_days: "180",
 	session_ttl_hours: "12",
 	admin_password: "",
 	registration_mode: "open",

@@ -1221,6 +1221,61 @@ describe("runDailyMaintenance", () => {
 		).toBe(0);
 	});
 
+	it("prunes rollup rows past the stats_retention_days setting (cutoff = today − N, strict <)", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(now.toISOString());
+		sqlite
+			.prepare(
+				"INSERT INTO settings (key, value, updated_at) VALUES ('stats_retention_days', '10', '2026-10-01T00:00:00.000Z')",
+			)
+			.run();
+		// Both rows are outside the 7-day backfill scan window → only the
+		// rollup prune touches them. stat_date < today−10 deletes, = stays.
+		insertRollupRow(sqlite, addUtcDays(today, -11));
+		insertRollupRow(sqlite, addUtcDays(today, -10));
+
+		await runDailyMaintenance(db, now);
+
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -11)}'`,
+			),
+		).toBe(0);
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -10)}'`,
+			),
+		).toBe(1);
+	});
+
+	it("defaults the rollup prune horizon to 180 days when the key is unset (pre-feature behavior)", async () => {
+		const sqlite = createSqlite();
+		const db = makeD1(sqlite);
+		const today = utcDateOf(now.toISOString());
+		// No settings row: the cutoff must be exactly today−180 (the old
+		// ROLLUP_RETENTION_DAYS constant), boundary row on the cutoff survives.
+		insertRollupRow(sqlite, addUtcDays(today, -181));
+		insertRollupRow(sqlite, addUtcDays(today, -180));
+
+		await runDailyMaintenance(db, now);
+
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -181)}'`,
+			),
+		).toBe(0);
+		expect(
+			countRows(
+				sqlite,
+				`SELECT COUNT(*) AS c FROM usage_stats_daily WHERE stat_date = '${addUtcDays(today, -180)}'`,
+			),
+		).toBe(1);
+	});
+
 	it("backfills two missing days and warns (not errors) on an incomplete retention prune", async () => {
 		const sqlite = createSqlite();
 		const real = makeD1(sqlite);

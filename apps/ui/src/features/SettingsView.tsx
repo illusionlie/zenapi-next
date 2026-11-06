@@ -282,6 +282,34 @@ export const SettingsView = ({
 					<div>
 						<label
 							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
+							for="stats-retention"
+						>
+							统计保留天数
+						</label>
+						<input
+							class="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+							id="stats-retention"
+							name="stats_retention_days"
+							type="number"
+							min="1"
+							max="365"
+							value={settingsForm.stats_retention_days}
+							onInput={(event) => {
+								const target = event.currentTarget as HTMLInputElement | null;
+								onFormChange({
+									stats_retention_days: target?.value ?? "",
+								});
+							}}
+						/>
+						<p class="mt-1 text-xs text-stone-500">
+							仪表盘历史统计的保留天数（1–365，默认
+							180），与日志保留天数相互独立；缩短会同步截短监测页长窗口（如
+							30d）的历史曲线。
+						</p>
+					</div>
+					<div>
+						<label
+							class="mb-1.5 block text-xs uppercase tracking-widest text-stone-500"
 							for="session-ttl"
 						>
 							会话时长（小时）

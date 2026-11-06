@@ -16,6 +16,7 @@ import {
 	getRequireInviteCode,
 	getRetentionDays,
 	getSessionTtlHours,
+	getStatsRetentionDays,
 	getTurnstileConfig,
 	isAdminPasswordSet,
 	loadAlertConfigDirect,
@@ -35,6 +36,7 @@ import {
 	MAX_PROXY_RETRY_DELAY_MS,
 	MAX_PROXY_RETRY_ROUNDS,
 	MAX_RATE_LIMIT_VALUE,
+	MAX_STATS_RETENTION_DAYS,
 	MIN_ALERT_FAILURE_RATE_PCT,
 	MIN_ALERT_MIN_SAMPLES,
 	MIN_ALERT_SILENCE_MINUTES,
@@ -44,6 +46,7 @@ import {
 	MIN_PROXY_RETRY_DELAY_MS,
 	MIN_PROXY_RETRY_ROUNDS,
 	MIN_RATE_LIMIT_VALUE,
+	MIN_STATS_RETENTION_DAYS,
 	type RegistrationMode,
 	setAdminPasswordHash,
 	setAlertFailureRatePct,
@@ -74,6 +77,7 @@ import {
 	setRequireInviteCode,
 	setRetentionDays,
 	setSessionTtlHours,
+	setStatsRetentionDays,
 	setTokenRpmDefault,
 	setTurnstileEnabled,
 	setTurnstileSecretKey,
@@ -90,6 +94,9 @@ const settings = new Hono<AppEnv>();
  */
 settings.get("/", async (c) => {
 	const retention = await getRetentionDays(c.env.DB);
+	// 统计保留天数同形态直读（cron 冷路径键，无缓存链）：缺失/脏值回退默认
+	// 180，读侧 clamp [1,365]——表单即真相
+	const statsRetentionDays = await getStatsRetentionDays(c.env.DB);
 	const sessionTtlHours = await getSessionTtlHours(c.env.DB);
 	const adminPasswordSet = await isAdminPasswordSet(c.env.DB);
 	const registrationMode = await getRegistrationMode(c.env.DB);
@@ -128,6 +135,7 @@ settings.get("/", async (c) => {
 	const cacheRatioConfig = await loadCacheRatioConfigDirect(c.env.DB);
 	return c.json({
 		log_retention_days: retention,
+		stats_retention_days: statsRetentionDays,
 		session_ttl_hours: sessionTtlHours,
 		admin_password_set: adminPasswordSet,
 		registration_mode: registrationMode,
@@ -189,6 +197,28 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setRetentionDays(c.env.DB, days);
+		touched = true;
+	}
+
+	// 统计保留天数（usage_stats_daily 清理视界，与 log_retention_days 相互
+	// 独立）：写侧严格整数 + 范围校验 [1, 365]（读侧 clamp / 脏值降默认 180
+	// 在 getStatsRetentionDays——两级形态，无 env 层；cron 冷路径键，不进
+	// loadProxySettingsCached 缓存链）
+	if (body.stats_retention_days !== undefined) {
+		const statsDays = Number(body.stats_retention_days);
+		if (
+			!Number.isInteger(statsDays) ||
+			statsDays < MIN_STATS_RETENTION_DAYS ||
+			statsDays > MAX_STATS_RETENTION_DAYS
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_stats_retention_days",
+				"invalid_stats_retention_days",
+			);
+		}
+		await setStatsRetentionDays(c.env.DB, statsDays);
 		touched = true;
 	}
 

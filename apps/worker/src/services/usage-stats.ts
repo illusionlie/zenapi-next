@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { maybeSendDailyReport } from "./alerts";
 import { PROBE_RETENTION_DAYS, pruneChannelProbes } from "./channel-probe";
-import { getRetentionDays } from "./settings";
+import { getRetentionDays, getStatsRetentionDays } from "./settings";
 
 /**
  * Daily usage pre-aggregation (usage_stats_daily) and retention helpers.
@@ -14,9 +14,6 @@ import { getRetentionDays } from "./settings";
  * semantics (cache_prompt_base keeps the NULL≠0 cache-rate denominator of
  * usage-accounting §3.4 intact on the rollup side).
  */
-
-/** Rollup rows older than this many UTC dates are pruned by the daily cron. */
-export const ROLLUP_RETENTION_DAYS = 180;
 
 /** Rows deleted per round of the batched usage_logs retention prune. */
 export const RETENTION_CHUNK_ROWS = 5000;
@@ -499,11 +496,19 @@ export async function runDailyMaintenance(
 	}
 
 	try {
+		// Retention horizon follows the stats_retention_days setting (default
+		// 180 = the pre-feature constant; read-side clamped [1, 365] in
+		// getStatsRetentionDays). Cold cron path, uncached read — same shape
+		// as the getRetentionDays read of the raw-log prune step above.
+		const statsRetentionDays = await getStatsRetentionDays(db);
 		const pruned = await pruneRollup(
 			db,
-			addUtcDays(todayUtc, -ROLLUP_RETENTION_DAYS),
+			addUtcDays(todayUtc, -statsRetentionDays),
 		);
-		console.log("[retention] usage_stats_daily pruned", { pruned });
+		console.log("[retention] usage_stats_daily pruned", {
+			statsRetentionDays,
+			pruned,
+		});
 	} catch (e) {
 		console.error("[retention] rollup prune failed", { error: String(e) });
 	}
