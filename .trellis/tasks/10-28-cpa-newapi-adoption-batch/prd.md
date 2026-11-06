@@ -11,7 +11,7 @@
 | 项 | 决策 | 备注 |
 |----|------|------|
 | 缓存 token 折价计费 | ✅ 实施 | 现 `calculateCost` 把含缓存 prompt 全量按 input_price 计价（`services/pricing.ts`），而 `prompt_tokens` 口径为含缓存总输入；Anthropic 缓存读上游收 0.1×、缓存写 1.25×，OpenAI cached 约 0.5×——对 Claude Code 等缓存重度场景用户被多收、运营账目与上游成本对不上；`usage_logs` 缓存列已具备，只差计价口径 |
-| Gemini 原生协议 | ✅ 分档做（2026-11-06 拍板） | 评估报告 `10-28-gemini-native-protocol/research/gemini-native-protocol-evaluation.md`：A 出站先行（8–10 人日）→ 实施子任务 `11-06-gemini-outbound-format`；B 入站 +6–8 人日挂起观察；cachedContents 裁掉（Google 主推 Interactions API、显式缓存 Gemini 4+ 不受支持）。关键利好：`?alt=sse` 即标准 SSE 全复用既有管线、`promptTokenCount` 含缓存与仓库口径吻合、`pricing.ts`/`selectTargetFormat` 零改动 |
+| Gemini 原生协议 | ✅ 分档做（2026-11-06 拍板） | 评估报告 `archive/2026-11/10-28-gemini-native-protocol/research/gemini-native-protocol-evaluation.md`：A 出站先行（8–10 人日）→ 实施子任务 `11-06-gemini-outbound-format`；B 入站 +6–8 人日挂起观察；cachedContents 裁掉（Google 主推 Interactions API、显式缓存 Gemini 4+ 不受支持）。关键利好：`?alt=sse` 即标准 SSE 全复用既有管线、`promptTokenCount` 含缓存与仓库口径吻合、`pricing.ts`/`selectTargetFormat` 零改动 |
 | 管理员 2FA | 🔍 设计评估 | 「可以考虑」按评估先行；管理员握全部渠道明文 key + 支付网关密钥 + 备份导入全量替换权，现仅密码 + session |
 | 敏感词过滤 | 🔍 设计评估 | 用户明确「要看看成本，毕竟是 worker」——热路径现状默认零 body 解析，过滤要求全量解析 + 扫描，成本收益必须算清 |
 | 兑换码 / 邀请返利 | ❌ 不做 | 不往运营激励方向发展 |

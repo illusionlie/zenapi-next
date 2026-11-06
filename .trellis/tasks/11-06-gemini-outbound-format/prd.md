@@ -2,7 +2,7 @@
 
 ## Goal
 
-渠道声明 `gemini`（`api_formats` 第 5 种）作为出站目标格式：openai chat 入站 ↔ gemini 上游双向转换、`alt=sse` 流式复用、逐格式探测接线、usage/计费口径接线。**本任务是评估报告 A 档的实施**——需求、范围、成本量级、任务拆分、风险清单的唯一事实来源是评估报告：`.trellis/tasks/10-28-gemini-native-protocol/research/gemini-native-protocol-evaluation.md`（规划 design.md / implement.md 时以其 §3–§8 为纲）。
+渠道声明 `gemini`（`api_formats` 第 5 种）作为出站目标格式：openai chat 入站 ↔ gemini 上游双向转换、`alt=sse` 流式复用、逐格式探测接线、usage/计费口径接线。**本任务是评估报告 A 档的实施**——需求、范围、成本量级、任务拆分、风险清单的唯一事实来源是评估报告：`.trellis/tasks/archive/2026-11/10-28-gemini-native-protocol/research/gemini-native-protocol-evaluation.md`（规划 design.md / implement.md 时以其 §3–§8 为纲）。
 
 B 档（入站 `/v1beta` 端点服务 Gemini CLI 类客户端）2026-11-06 拍板**挂起观察**，不在本任务范围。
 

@@ -831,3 +831,26 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: Gemini 原生协议设计评估（A 档采纳立项）
+
+**Date**: 2026-11-06
+**Task**: 10-28-gemini-native-protocol 设计评估（批次 10-28-cpa-newapi-adoption-batch 第 2/4 项）
+**Branch**: `main`
+
+### Summary
+
+评估型任务全链路（零业务代码）：trellis-research 产出评估报告（Q1–Q7 逐项作答，~30 代码锚点 + 5 项官方外部断言溯源），trellis-check 校验通过（3 处行号漂移已修正）。核心发现：Gemini `?alt=sse` 即标准 SSE 可全复用既有流式管线；`promptTokenCount` 官方含缓存与仓库 cached ⊆ prompt 口径吻合；usageMetadata 无缓存写字段 → cache_creation 恒 NULL；`pricing.ts` 与 `selectTargetFormat` 本体零改动；cachedContents 裁掉（Google 主推 Interactions API）。用户拍板**分档做**：A 出站（8–10 人日）→ 立项 `11-06-gemini-outbound-format`（PRD 已种，复杂任务待 design/implement）；B 入站 +6–8 人日挂起观察。spec 判断：无代码契约变更、新知识已持久化为报告本体，无需更新。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ac8766` | (see git log) |
+| `ebd60a0` | (see git log) |
+| `66967d1` | (see git log) |
+
+### Status
+
+[OK] **Completed**
