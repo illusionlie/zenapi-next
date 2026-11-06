@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-10-31
+- **Total Sessions**: 25
+- **Last Active**: 2026-11-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~811 | Active |
+| `journal-1.md` | ~833 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-11-06 | stats_retention_days：rollup 统计保留期可配置 | `de7d97b`, `f98dfb8` | `main` |
 | 24 | 2026-10-31 | 品牌更名 ZenAPI Next（BrandMark 徽章 + worker 文本） | `a878b4e`, `0b79fb9` | `main` |
 | 23 | 2026-10-31 | 流式 usage 丢行诊断与修复（waitUntil 取消链） | `802ebf0`, `b79f9d9`, `4d8f722` | `main` |
 | 22 | 2026-10-28 | 缓存 token 折价计费落地 + CPA/NewAPI 批次立项 | `f81de80`, `3f1f373` | `main` |

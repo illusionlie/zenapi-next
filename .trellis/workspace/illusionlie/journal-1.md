@@ -809,3 +809,25 @@ UsageView 行展开详情面板：错误详情(JSON 提取+原始报文)/缓存 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: stats_retention_days：rollup 统计保留期可配置
+
+**Date**: 2026-11-06
+**Task**: stats_retention_days：rollup 统计保留期可配置
+**Branch**: `main`
+
+### Summary
+
+诊断「日志按保留天数清理但主页统计仍显示 10-15 起 20+ 天数据」：生产 D1 实锤 log_retention_days=10 清明细正常、usage_stats_daily rollup 硬编码 180 天独立保留（46e3d8c 2026-10-20 预聚合大改引入，仪表盘无参 splitWindow 读全史）。修复：新增 settings 键 stats_retention_days（默认 180 未设置行为逐字节不变、读侧 clamp [1,365]、PUT 严格整数非法 400 invalid_stats_retention_days、cron 冷路径直读不入 PROXY_SETTING_KEYS、BACKUP_SETTINGS_EXPORT_KEYS 23→24、UI SettingsView 统计保留天数字段含监测长窗口截短提示）；pruneRollup cutoff 跟随设置。新增 tests/stats-retention-setting.test.ts 10 用例 + 维护链 2 用例，981 用例全绿。待办：push 部署后管理台手动设统计保留天数=10，次日 03:17 UTC cron 清掉 stat_date<today-10 幽灵统计。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `de7d97b` | (see git log) |
+| `f98dfb8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
